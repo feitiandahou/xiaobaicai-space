@@ -1,0 +1,115 @@
+# ---------------------------------------------------------
+# 1. Python / FastAPI (后端相关)
+# ---------------------------------------------------------
+
+# Python 虚拟环境 (非常重要，不要上传几十兆的依赖包)
+# 假设你的虚拟环境在 api/venv 或 backend/venv
+**/venv/
+**/env/
+**/.venv/
+**/ENV/
+
+# Python 缓存文件
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 打包分发产生的文件
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+*.egg
+
+# 安装记录
+*.manifest
+*.spec
+
+# 单元测试覆盖率
+.coverage
+htmlcov/
+.pytest_cache/
+
+# mypy (类型检查)
+.mypy_cache/
+
+# ---------------------------------------------------------
+# 2. Next.js / Node.js (前端相关)
+# ---------------------------------------------------------
+
+# 依赖包 (node_modules 永远不要上传)
+node_modules/
+.pnp
+.pnp.js
+
+# 构建输出 (npm run build 生成的文件)
+.next/
+out/
+
+# 生产环境构建
+build/
+
+# 调试日志
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 如果是用 pnpm
+pnpm-debug.log*
+.pnpm-debug.log*
+
+# ---------------------------------------------------------
+# 3. 环境变量 (安全相关 - 核心！)
+# ---------------------------------------------------------
+
+# 本地环境变量 (包含 API Key，绝对保密)
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# 注意：如果你需要共享环境变量模板（不含真实密钥），
+# 可以保留 .env.example 并在里面填写占位符
+
+# ---------------------------------------------------------
+# 4. IDE / 编辑器 (个人配置)
+# ---------------------------------------------------------
+
+# VS Code
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS (系统产生的垃圾文件)
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ---------------------------------------------------------
+# 5. 测试与日志
+# ---------------------------------------------------------
+*.log
+.npm
+.eslintcache
