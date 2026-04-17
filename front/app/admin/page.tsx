@@ -131,6 +131,18 @@ export default function AdminDashboard() {
                 <div className="text-sm text-muted-foreground font-mono truncate">
                   /{post.slug}
                 </div>
+                {post.tags?.length ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {post.tags.map((tag) => (
+                      <span
+                        key={tag}
+                        className="px-2 py-1 rounded-full bg-black/5 dark:bg-white/10 text-xs text-muted-foreground"
+                      >
+                        #{tag}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
               </div>
               <Link
                 href={`/admin/posts/${post.id}`}

@@ -1,9 +1,10 @@
 import os
-from typing import Optional, List
+from typing import Optional
 from datetime import datetime, timezone
+from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Header, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from supabase import Client, create_client
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -36,6 +37,20 @@ def verify_admin(x_admin_token: str = Header(...)):
         raise HTTPException(status_code=403, detail="Forbidden. Invalid Admin Token.")
     return True
 
+
+def normalize_tags(tags: Optional[list[str]]) -> list[str]:
+    if not tags:
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for tag in tags:
+        cleaned = tag.strip().lower()
+        if cleaned and cleaned not in seen:
+            normalized.append(cleaned)
+            seen.add(cleaned)
+    return normalized
+
 # --- Pydantic Models ---
 class PostCreate(BaseModel):
     title: str
@@ -44,6 +59,12 @@ class PostCreate(BaseModel):
     content: str
     cover_image: Optional[str] = None
     is_published: bool = False
+    tags: list[str] = Field(default_factory=list)
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, value: list[str]) -> list[str]:
+        return normalize_tags(value)
 
 class PostUpdate(BaseModel):
     title: Optional[str] = None
@@ -52,6 +73,14 @@ class PostUpdate(BaseModel):
     content: Optional[str] = None
     cover_image: Optional[str] = None
     is_published: Optional[bool] = None
+    tags: Optional[list[str]] = None
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, value: Optional[list[str]]) -> Optional[list[str]]:
+        if value is None:
+            return None
+        return normalize_tags(value)
 
 # --- Public Endpoints ---
 @app.get("/api/posts")
@@ -60,7 +89,7 @@ def get_published_posts():
         supabase = get_supabase_client()
         result = (
             supabase.table("posts")
-            .select("id, title, slug, summary, cover_image, created_at, likes")
+            .select("id, title, slug, summary, cover_image, created_at, likes, tags")
             .eq("is_published", True)
             .order("created_at", desc=True)
             .execute()
@@ -92,22 +121,11 @@ def get_post_by_slug(slug: str):
 def like_post(slug: str):
     try:
         supabase = get_supabase_client()
-        # First get the post
-        post_result = supabase.table("posts").select("id, likes").eq("slug", slug).execute()
-        if not post_result.data:
+        result = supabase.rpc("increment_post_likes", {"post_slug": slug}).execute()
+        if not result.data:
             raise HTTPException(status_code=404, detail="Post not found")
-        
-        post_id = post_result.data[0]["id"]
-        current_likes = post_result.data[0].get("likes", 0)
-        
-        # Increment likes
-        update_result = (
-            supabase.table("posts")
-            .update({"likes": current_likes + 1})
-            .eq("id", post_id)
-            .execute()
-        )
-        return {"message": "Liked successfully", "likes": update_result.data[0]["likes"]}
+
+        return {"message": "Liked successfully", "likes": result.data[0]["likes"]}
     except HTTPException:
         raise
     except Exception as exc:
@@ -179,3 +197,16 @@ def delete_post(id: str):
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+#test
+@app.get("/api/test")
+async def get_test():
+    return JSONResponse(
+        content={"message": "This is a GET request to /test", "status": "success"},
+        status_code=200
+    )
+@app.post("/api/test")
+async def echo_test(teststr: str):
+    return JSONResponse(
+        content={"message": teststr, "status": "success"},
+        status_code=200
+    )

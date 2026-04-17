@@ -9,10 +9,22 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 
+function parseTags(value: string): string[] {
+  return Array.from(
+    new Set(
+      value
+        .split(',')
+        .map((tag) => tag.trim().toLowerCase())
+        .filter(Boolean)
+    )
+  );
+}
+
 export default function NewPost() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [isError, setIsError] = useState('');
+  const [tagsInput, setTagsInput] = useState('');
   
   const [formData, setFormData] = useState<PostCreateData>({
     title: '',
@@ -20,6 +32,7 @@ export default function NewPost() {
     summary: '',
     content: '',
     cover_image: '',
+    tags: [],
     is_published: false,
   });
 
@@ -29,7 +42,10 @@ export default function NewPost() {
     setLoading(true);
     try {
       const token = localStorage.getItem('admin_token') || '';
-      await createPost(token, formData);
+      await createPost(token, {
+        ...formData,
+        tags: parseTags(tagsInput),
+      });
       router.push('/admin');
     } catch (err) {
       setIsError((err as Error).message);
@@ -88,9 +104,20 @@ export default function NewPost() {
            <textarea
              value={formData.summary}
              onChange={(e) => setFormData({...formData, summary: e.target.value})}
-             className="w-full px-4 py-3 bg-white/70 dark:bg-black/70 border border-black/10 dark:border-white/20 rounded-2xl focus:outline-none focus:ring-2 focus:ring-foreground focus:border-transparent transition-all min-h-[80px] resize-y"
+             className="w-full px-4 py-3 bg-white/70 dark:bg-black/70 border border-black/10 dark:border-white/20 rounded-2xl focus:outline-none focus:ring-2 focus:ring-foreground focus:border-transparent transition-all min-h-20 resize-y"
              placeholder="A short brief of what is to come..."
            />
+        </div>
+
+        <div className="space-y-2">
+           <label className="text-sm font-medium tracking-tight">Tags</label>
+           <input
+             value={tagsInput}
+             onChange={(e) => setTagsInput(e.target.value)}
+             className="w-full px-4 py-3 bg-white/70 dark:bg-black/70 border border-black/10 dark:border-white/20 rounded-2xl focus:outline-none focus:ring-2 focus:ring-foreground focus:border-transparent transition-all"
+             placeholder="react, fastapi, supabase"
+           />
+           <p className="text-xs text-muted-foreground">Use commas to separate tags.</p>
         </div>
 
         <div className="space-y-2">

@@ -67,6 +67,19 @@ export default function BlogLandingPage() {
                   {post.summary}
                 </p>
 
+                {post.tags?.length ? (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {post.tags.map((tag) => (
+                      <span
+                        key={tag}
+                        className="rounded-full bg-black/5 dark:bg-white/10 px-2.5 py-1 text-xs text-muted-foreground"
+                      >
+                        #{tag}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+
                 <div className="mt-4 flex items-center text-sm font-medium text-foreground tracking-wide group-hover:text-blue-600 dark:group-hover:text-blue-400">
                   Read article <ArrowRight className="ml-1 w-4 h-4 transition-transform group-hover:translate-x-1" />
                 </div>

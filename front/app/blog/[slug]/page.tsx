@@ -87,6 +87,18 @@ export default function BlogPost() {
               {post.summary}
             </p>
           )}
+          {post.tags?.length ? (
+            <div className="mt-6 flex flex-wrap gap-2">
+              {post.tags.map((tag) => (
+                <span
+                  key={tag}
+                  className="rounded-full bg-black/5 dark:bg-white/10 px-3 py-1 text-sm text-muted-foreground"
+                >
+                  #{tag}
+                </span>
+              ))}
+            </div>
+          ) : null}
         </header>
 
         {/* Since content is likely markdown/html in a real app, you would parse it here 
@@ -125,7 +137,7 @@ export default function BlogPost() {
               )}
             </AnimatePresence>
             <Heart className={cn("w-6 h-6", likeCount > 0 ? "fill-rose-500 text-rose-500" : "text-muted-foreground")} />
-            <span className="text-lg font-medium text-foreground min-w-[20px] text-center">
+            <span className="text-lg font-medium text-foreground min-w-5 text-center">
               {likeCount}
             </span>
           </motion.button>
