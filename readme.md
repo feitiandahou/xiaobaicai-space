@@ -26,7 +26,7 @@ fastapi
 
 sqlalchemy
 
-supabase
+supabase | mysql
 
 ### database
 
@@ -44,11 +44,17 @@ npm run dev
 
 cd backend
 
+Rename ".env.example" File to ".env" 
+and fill in your database information 
+
+uv sync
+
 uv run uvicorn main:app --reload
 
 +++
 
-stop-process(windos):
-
+stop-process(windows):
+In CMD: Ctrl + C
+Or
 Stop-Process -Name uv,uvicorn,python -Force
 

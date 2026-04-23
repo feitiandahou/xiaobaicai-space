@@ -1,4 +1,4 @@
--- src/schema.sql
+-- rapid prototyping, Please ignore.
 
 -- Create a table for blog posts
 create table public.posts (
