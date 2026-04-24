@@ -44,6 +44,8 @@ class PostOut(PostBase):
 	like_count: int
 	created_at: datetime
 	updated_at: datetime
+	tag_ids: list[int] = Field(default_factory=list)
+	tags: list[str] = Field(default_factory=list)
 
 
 class PostListItem(BaseModel):
@@ -56,6 +58,27 @@ class PostListItem(BaseModel):
 	cover_image: str | None
 	status: int
 	is_top: int
+	view_count: int
+	like_count: int
 	published_at: datetime | None
 	created_at: datetime
+	tag_ids: list[int] = Field(default_factory=list)
+	tags: list[str] = Field(default_factory=list)
+
+
+class PostResponse(BaseModel):
+	data: PostOut
+
+
+class PostListResponse(BaseModel):
+	data: list[PostListItem]
+
+
+class PostLikeResponse(BaseModel):
+	message: str
+	like_count: int
+
+
+class MessageResponse(BaseModel):
+	message: str
 

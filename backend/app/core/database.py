@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import DeclarativeBase
 from .config import settings
 
 #创建异步引擎 echo=True用于打印SQL语句
@@ -11,7 +11,8 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 #创建基类， 所有模型都要继承它
-Base = declarative_base()
+class Base(DeclarativeBase):
+    pass
 
 #依赖注入：获取数据库会话
 async def get_db():

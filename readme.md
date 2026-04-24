@@ -26,11 +26,9 @@ fastapi
 
 sqlalchemy
 
-supabase | mysql
-
 ### database
 
-supabase.com
+supabase | mysql
 
 ### quick start
 
@@ -47,9 +45,11 @@ cd backend
 Rename ".env.example" File to ".env" 
 and fill in your database information 
 
+import database file (backend/mysql.sql)
+
 uv sync
 
-uv run uvicorn main:app --reload
+uv run uvicorn app.main:app --reload
 
 +++
 
