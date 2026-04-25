@@ -1,4 +1,4 @@
-## rapid prototyping, Please ignore.
+## rapid prototyping using supabase, Please ignore.
 import os
 from typing import Optional
 from datetime import datetime, timezone

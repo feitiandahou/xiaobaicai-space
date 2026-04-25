@@ -145,7 +145,25 @@ CREATE TABLE `admin_logs` (
   
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='管理员操作日志表';
 
--- 7.系统配置表
+-- 7.文章点赞表
+CREATE TABLE `post_likes` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `post_id` BIGINT UNSIGNED NOT NULL,
+  `actor_key` VARCHAR(80) NOT NULL,
+  `ip_address` VARCHAR(45) DEFAULT NULL,
+  `user_agent` VARCHAR(255) DEFAULT NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_post_actor` (`post_id`, `actor_key`),
+  KEY `idx_ip_created` (`ip_address`, `created_at`),
+
+  CONSTRAINT `fk_post_likes_post`
+    FOREIGN KEY (`post_id`) REFERENCES `posts`(`id`)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 8.系统配置表
 DROP TABLE IF EXISTS `settings`;
 
 CREATE TABLE `settings` (

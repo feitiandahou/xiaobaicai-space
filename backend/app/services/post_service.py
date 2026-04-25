@@ -1,15 +1,15 @@
 from collections.abc import Sequence
-from math import e
-from turtle import update
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 from backend.app.models.category import Category
 from backend.app.models.post import Post
+from backend.app.models.post_like import PostLike
 from backend.app.models.tag import Tag
 from backend.app.models.user import User
-from backend.app.schemas.post import PostOut, PostListItem
+from backend.app.schemas.post import PostCreate, PostOut, PostListItem, PostUpdate
 
 
 class PostServiceError(Exception):
@@ -161,3 +161,95 @@ async def list_posts(
         stmt = stmt.where(Post.category_id == category_id)
     posts = await db.scalars(stmt)
     return [_serialize_post_list_item(post) for post in posts]
+
+async def get_post(db: AsyncSession, post_id: int, *, include_deleted: bool = False) -> PostOut:
+    post = await _get_post_or_raise(db, post_id, include_deleted=include_deleted)
+    return _serialize_post(post)
+
+async def get_post_by_slug(
+        db: AsyncSession,
+        slug: str,
+        *,
+        include_deleted: bool = False,
+) -> PostOut:
+    post = await _get_post_by_slug_or_raise(db, slug, include_deleted=include_deleted)
+    return _serialize_post(post)
+
+async def create_post(db: AsyncSession, payload: PostCreate) -> PostOut:
+    await _ensure_user_exists(db, payload.user_id)
+    await _ensure_category_exists(db, payload.category_id)
+    await _ensure_slug_available(db, payload.slug)
+    tags = await _load_tags(db, payload.tag_ids)
+
+    post = Post(**payload.model_dump(exclude={"tag_ids"}))
+    post.tags = tags
+    db.add(post)
+    await db.commit()
+
+    create_post = await _get_post_or_raise(db, int(post.id), include_deleted=True)
+    return _serialize_post(create_post)
+
+async def update_post(db: AsyncSession, post_id: int, payload: PostUpdate) -> PostOut:
+    post = await _get_post_or_raise(db, post_id, include_deleted=True)
+    update_data = payload.model_dump(exclude_unset=True, exclude={"tag_ids"})
+
+    if "slug" in update_data:
+        await _ensure_slug_available(db, update_data["slug"], exclude_post_id=post_id)
+    if "category_id" in update_data:
+        await _ensure_category_exists(db, update_data["category_id"])
+    
+    for field_name, value in update_data.items():
+        setattr(post, field_name, value)
+    
+    if payload.tag_ids is not None:
+        post.tags = await _load_tags(db, payload.tag_ids)
+    
+    await db.commit()
+
+    update_post = await _get_post_or_raise(db, post_id, include_deleted=True)
+    return _serialize_post(update_post)
+
+async def delete_post(db: AsyncSession, post_id: int) -> None:
+    post = await _get_post_or_raise(db, post_id, include_deleted=False)
+    post.is_delete = 1
+    await db.commit()
+
+#No user plagiarism check and concurrency detection, abandoned
+#async def like_post(db: AsyncSession, slug: str) -> int:
+#	post = await _get_post_by_slug_or_raise(db, slug, include_deleted=False)
+#	post.like_count = int(post.like_count) + 1
+#	await db.commit()
+#	return int(post.like_count)
+async def like_post(
+        db: AsyncSession,
+        slug: str,
+        *,
+        actor_key: str,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+) -> int:
+    post = await _get_post_by_slug_or_raise(db, slug, include_deleted=False)
+    
+    try:
+        like = PostLike(
+            post_id=int(post.id),
+            actor_key=actor_key,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+        db.add(like)
+        await db.flush()
+
+        await db.execute(
+            update(Post)
+            .where(Post.id == post.id, Post.is_delete == 0)
+            .values(like_count=Post.like_count + 1)
+        )
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise PostConflictError("Already liked") from exc
+    like_count = await db.scalar(
+        select(Post.like_count).where(Post.id == post.id)
+    )
+    return int(like_count or 0)

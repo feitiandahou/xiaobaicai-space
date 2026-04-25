@@ -1,14 +1,16 @@
-from app.models.admin_log import AdminLog
-from app.models.category import Category
-from app.models.post import Post, post_tags
-from app.models.setting import Setting
-from app.models.tag import Tag
-from app.models.user import User
+from .admin_log import AdminLog
+from .category import Category
+from .post import Post, post_tags
+from .post_like import PostLike
+from .setting import Setting
+from .tag import Tag
+from .user import User
 
 __all__ = [
     "AdminLog",
     "Category",
     "Post",
+    "PostLike",
     "Setting",
     "Tag",
     "User",
