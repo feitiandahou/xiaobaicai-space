@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from fastapi import APIRouter, Cookie, HTTPException, Request, Response, status, Query, Depends
+from fastapi import APIRouter, Cookie, Request, Response, status, Query, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas.post import (
     MessageResponse,
@@ -11,10 +11,6 @@ from app.schemas.post import (
     PostLikeResponse,
 )
 from app.services.post_service import (
-    PostNotFoundError,
-    PostConflictError,
-    PostValidationError,
-    PostPermissionError,
     create_post as create_post_service,
     get_post as get_post_service,
     get_post_by_slug as get_post_by_slug_service,
@@ -28,18 +24,6 @@ from app.core.security import get_current_user
 from app.models.user import User
 
 router = APIRouter(prefix="/posts", tags=["posts"])
-
-
-def _raise_post_error(exc: Exception) -> None:
-    if isinstance(exc, PostNotFoundError):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    if isinstance(exc, PostConflictError):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    if isinstance(exc, PostValidationError):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-    if isinstance(exc, PostPermissionError):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-    raise exc
 
 @router.get("", response_model=PostListResponse)
 async def list_posts(
@@ -62,18 +46,12 @@ async def list_posts(
 
 @router.get("/{post_id}", response_model=PostResponse)
 async def get_post(post_id: int, db: AsyncSession = Depends(get_db)) -> PostResponse:
-    try:
-        post = await get_post_service(db, post_id)
-    except (PostNotFoundError, PostConflictError, PostValidationError) as exc:
-        _raise_post_error(exc)
+    post = await get_post_service(db, post_id)
     return PostResponse(data=post)
 
 @router.get("/slug/{slug}", response_model=PostResponse)
 async def get_post_by_slug(slug: str, db: AsyncSession = Depends(get_db)) -> PostResponse:
-    try:
-        post = await get_post_by_slug_service(db, slug)
-    except (PostNotFoundError, PostConflictError, PostValidationError) as exc:
-        _raise_post_error(exc)
+    post = await get_post_by_slug_service(db, slug)
     return PostResponse(data=post)
 
 @router.post("", response_model=PostResponse, status_code=status.HTTP_201_CREATED)
@@ -82,10 +60,7 @@ async def create_post(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> PostResponse:
-    try:
-        post = await create_post_service(db, payload, actor=current_user)
-    except (PostNotFoundError, PostConflictError, PostValidationError, PostPermissionError) as exc:
-        _raise_post_error(exc)
+    post = await create_post_service(db, payload, actor=current_user)
     return PostResponse(data=post)
 
 @router.put("/{post_id}", response_model=PostResponse)
@@ -95,10 +70,7 @@ async def update_post(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> PostResponse:
-    try:
-        post = await update_post_service(db, post_id, payload, actor=current_user)
-    except (PostNotFoundError, PostConflictError, PostValidationError, PostPermissionError) as exc:
-        _raise_post_error(exc)
+    post = await update_post_service(db, post_id, payload, actor=current_user)
     return PostResponse(data=post)
 
 @router.delete("/{post_id}", response_model = MessageResponse)
@@ -107,10 +79,7 @@ async def delete_post(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> MessageResponse:
-    try:
-        await delete_post_service(db, post_id, actor=current_user)
-    except (PostNotFoundError, PostConflictError, PostValidationError, PostPermissionError) as exc:
-        _raise_post_error(exc)
+    await delete_post_service(db, post_id, actor=current_user)
     return MessageResponse(message="Post deleted successfully")
 
 @router.post("/slug/{slug}/like", response_model=PostLikeResponse)
@@ -132,16 +101,13 @@ async def like_post(
             samesite="lax",
             max_age=60 * 60 *24 * 365,  # 1 year
         )
-    try:
-        like_count = await like_post_service(
-            db,
-            slug,
-            actor_key=actor_key,
-            ip_address=request.client.host if request.client else None,
-            user_agent=request.headers.get("user-agent"),
-        )
-    except (PostNotFoundError, PostConflictError, PostValidationError) as exc:
-        _raise_post_error(exc)
+    like_count = await like_post_service(
+        db,
+        slug,
+        actor_key=actor_key,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
     return PostLikeResponse(
         message="Liked successfully",
         like_count=like_count,

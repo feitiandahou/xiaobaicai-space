@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.posts import router as post_router
 from app.api.v1.users import router as user_router
 from app.core.database import engine
+from app.core.exception_handlers import register_exception_handlers
 #FastAPI 新版的生命周期管理
 #项目启动时先检查数据库能不能连上，项目关闭时自动清理资源
 @asynccontextmanager
@@ -21,6 +22,8 @@ app = FastAPI(
     description="Backend API for the Xiaobaicai Space blog project.",
     lifespan=lifespan,
 )
+
+register_exception_handlers(app)
 
 app.add_middleware(
     CORSMiddleware,
