@@ -4,13 +4,13 @@ from datetime import datetime
 from sqlalchemy import  ForeignKey, Index, Nullable, UniqueConstraint, DateTime, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.mysql import BIGINT
-from backend.app.core.database import Base
+from app.core.database import Base
 
 
 class PostLike(Base):
     __tablename__ = "post_likes"
     __table_args__ = (
-        UniqueConstraint("post_id", "user_id", name="uq_post_user"),
+        UniqueConstraint("post_id", "actor_key", name="uk_post_actor"),
         Index("idx_ip_created", "ip_address", "created_at"),
     )
 

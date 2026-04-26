@@ -29,7 +29,6 @@ class PostUpdate(BaseModel):
 	category_id: int | None = None
 	status: int | None = Field(default=None, ge=0, le=2)
 	is_top: int | None = Field(default=None, ge=0, le=1)
-	is_delete: int | None = Field(default=None, ge=0, le=1)
 	published_at: datetime | None = None
 	tag_ids: list[int] | None = None
 

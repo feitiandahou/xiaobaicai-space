@@ -28,7 +28,7 @@ sqlalchemy
 
 ### database
 
-supabase | mysql
+mysql
 
 ### quick start
 

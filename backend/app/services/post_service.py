@@ -4,12 +4,12 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
-from backend.app.models.category import Category
-from backend.app.models.post import Post
-from backend.app.models.post_like import PostLike
-from backend.app.models.tag import Tag
-from backend.app.models.user import User
-from backend.app.schemas.post import PostCreate, PostOut, PostListItem, PostUpdate
+from app.models.category import Category
+from app.models.post import Post
+from app.models.post_like import PostLike
+from app.models.tag import Tag
+from app.models.user import User
+from app.schemas.post import PostCreate, PostOut, PostListItem, PostUpdate
 
 
 class PostServiceError(Exception):
@@ -20,6 +20,26 @@ class PostConflictError(PostServiceError):
     pass
 class PostValidationError(PostServiceError):
     pass
+class PostPermissionError(PostServiceError):
+    pass
+
+
+def _is_admin(actor: User) -> bool:
+    return actor.role == "admin"
+
+
+def _ensure_can_create_post(actor: User, author_id: int) -> None:
+    if _is_admin(actor):
+        return
+    if int(actor.id) != author_id:
+        raise PostPermissionError("Not allowed to create posts for another user")
+
+
+def _ensure_can_manage_post(actor: User, post: Post) -> None:
+    if _is_admin(actor):
+        return
+    if int(actor.id) != int(post.user_id):
+        raise PostPermissionError("Not allowed to modify this post")
 
 def _post_query():
     return select(Post).options(selectinload(Post.tags))
@@ -142,6 +162,7 @@ async def list_posts(
     db: AsyncSession,
     *,
     published_only: bool = False,
+    include_drafts: bool = False,
     include_deleted: bool = False,
     status: int | None = None,
     category_id: int | None = None,
@@ -157,6 +178,8 @@ async def list_posts(
         stmt = stmt.where(Post.status == 1)
     elif status is not None:
         stmt = stmt.where(Post.status == status)
+    elif not include_drafts:
+        stmt = stmt.where(Post.status != 0)
     if category_id is not None:
         stmt = stmt.where(Post.category_id == category_id)
     posts = await db.scalars(stmt)
@@ -175,7 +198,8 @@ async def get_post_by_slug(
     post = await _get_post_by_slug_or_raise(db, slug, include_deleted=include_deleted)
     return _serialize_post(post)
 
-async def create_post(db: AsyncSession, payload: PostCreate) -> PostOut:
+async def create_post(db: AsyncSession, payload: PostCreate, *, actor: User) -> PostOut:
+    _ensure_can_create_post(actor, payload.user_id)
     await _ensure_user_exists(db, payload.user_id)
     await _ensure_category_exists(db, payload.category_id)
     await _ensure_slug_available(db, payload.slug)
@@ -189,8 +213,9 @@ async def create_post(db: AsyncSession, payload: PostCreate) -> PostOut:
     create_post = await _get_post_or_raise(db, int(post.id), include_deleted=True)
     return _serialize_post(create_post)
 
-async def update_post(db: AsyncSession, post_id: int, payload: PostUpdate) -> PostOut:
-    post = await _get_post_or_raise(db, post_id, include_deleted=True)
+async def update_post(db: AsyncSession, post_id: int, payload: PostUpdate, *, actor: User) -> PostOut:
+    post = await _get_post_or_raise(db, post_id, include_deleted=False)
+    _ensure_can_manage_post(actor, post)
     update_data = payload.model_dump(exclude_unset=True, exclude={"tag_ids"})
 
     if "slug" in update_data:
@@ -206,11 +231,12 @@ async def update_post(db: AsyncSession, post_id: int, payload: PostUpdate) -> Po
     
     await db.commit()
 
-    update_post = await _get_post_or_raise(db, post_id, include_deleted=True)
+    update_post = await _get_post_or_raise(db, post_id, include_deleted=False)
     return _serialize_post(update_post)
 
-async def delete_post(db: AsyncSession, post_id: int) -> None:
+async def delete_post(db: AsyncSession, post_id: int, *, actor: User) -> None:
     post = await _get_post_or_raise(db, post_id, include_deleted=False)
+    _ensure_can_manage_post(actor, post)
     post.is_delete = 1
     await db.commit()
 

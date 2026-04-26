@@ -1,23 +1,20 @@
 from uuid import uuid4
 
 from fastapi import APIRouter, Cookie, HTTPException, Request, Response, status, Query, Depends
-from httpx import get, post
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas.post import (
     MessageResponse,
     PostCreate,
     PostUpdate,
-    PostOut,
-    PostListItem,
     PostResponse,
     PostListResponse,
     PostLikeResponse,
-    MessageResponse,
 )
 from app.services.post_service import (
     PostNotFoundError,
     PostConflictError,
     PostValidationError,
+    PostPermissionError,
     create_post as create_post_service,
     get_post as get_post_service,
     get_post_by_slug as get_post_by_slug_service,
@@ -26,7 +23,9 @@ from app.services.post_service import (
     delete_post as delete_post_service,
     like_post as like_post_service,
 )
-from backend.app.core.database import get_db
+from app.core.database import get_db
+from app.core.security import get_current_user
+from app.models.user import User
 
 router = APIRouter(prefix="/posts", tags=["posts"])
 
@@ -38,12 +37,15 @@ def _raise_post_error(exc: Exception) -> None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if isinstance(exc, PostValidationError):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    if isinstance(exc, PostPermissionError):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     raise exc
 
 @router.get("", response_model=PostListResponse)
 async def list_posts(
     published_only: bool = Query(False),
     include_drafts: bool = Query(False),
+    include_deleted: bool = Query(False),
     status_filter: int | None = Query(None, alias="status", ge=0, le=2),
     category_id: int | None = Query(None, ge=1),
     db: AsyncSession = Depends(get_db)
@@ -51,7 +53,8 @@ async def list_posts(
     posts = await list_posts_service(
         db,
         published_only=published_only,
-        include_deleted=include_drafts,
+        include_drafts=include_drafts,
+        include_deleted=include_deleted,
         status=status_filter,
         category_id=category_id,
     )
@@ -65,7 +68,7 @@ async def get_post(post_id: int, db: AsyncSession = Depends(get_db)) -> PostResp
         _raise_post_error(exc)
     return PostResponse(data=post)
 
-@router.get("/{slug}", response_model=PostResponse)
+@router.get("/slug/{slug}", response_model=PostResponse)
 async def get_post_by_slug(slug: str, db: AsyncSession = Depends(get_db)) -> PostResponse:
     try:
         post = await get_post_by_slug_service(db, slug)
@@ -74,26 +77,39 @@ async def get_post_by_slug(slug: str, db: AsyncSession = Depends(get_db)) -> Pos
     return PostResponse(data=post)
 
 @router.post("", response_model=PostResponse, status_code=status.HTTP_201_CREATED)
-async def create_post(payload: PostCreate, db: AsyncSession = Depends(get_db)) -> PostResponse:
+async def create_post(
+    payload: PostCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PostResponse:
     try:
-        post = await create_post_service(db, payload)
-    except (PostNotFoundError, PostConflictError, PostValidationError) as exc:
+        post = await create_post_service(db, payload, actor=current_user)
+    except (PostNotFoundError, PostConflictError, PostValidationError, PostPermissionError) as exc:
         _raise_post_error(exc)
     return PostResponse(data=post)
 
 @router.put("/{post_id}", response_model=PostResponse)
-async def update_post(post_id: int, payload: PostUpdate, db: AsyncSession = Depends(get_db)) -> PostResponse:
+async def update_post(
+    post_id: int,
+    payload: PostUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PostResponse:
     try:
-        post = await update_post_service(db, post_id, payload)
-    except (PostNotFoundError, PostConflictError, PostValidationError) as exc:
+        post = await update_post_service(db, post_id, payload, actor=current_user)
+    except (PostNotFoundError, PostConflictError, PostValidationError, PostPermissionError) as exc:
         _raise_post_error(exc)
     return PostResponse(data=post)
 
 @router.delete("/{post_id}", response_model = MessageResponse)
-async def delete_post(post_id: int, db: AsyncSession = Depends(get_db)) -> MessageResponse:
+async def delete_post(
+    post_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> MessageResponse:
     try:
-        await delete_post_service(db, post_id)
-    except (PostNotFoundError, PostConflictError, PostValidationError) as exc:
+        await delete_post_service(db, post_id, actor=current_user)
+    except (PostNotFoundError, PostConflictError, PostValidationError, PostPermissionError) as exc:
         _raise_post_error(exc)
     return MessageResponse(message="Post deleted successfully")
 
