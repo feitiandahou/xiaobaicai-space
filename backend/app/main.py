@@ -1,10 +1,9 @@
 from contextlib import asynccontextmanager
-from sqlalchemy import text
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
-from app.api.v1.posts import router as post_router
-from app.api.v1.users import router as user_router
+from app.api.router import api_router
 from app.core.database import engine
 from app.core.exception_handlers import register_exception_handlers
 #FastAPI 新版的生命周期管理
@@ -36,8 +35,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(post_router, prefix="/api/v1")
-app.include_router(user_router, prefix="/api/v1")
+app.include_router(api_router)
 
 @app.get("/")
 async def root() -> dict[str, str]:

@@ -12,8 +12,8 @@ from app.schemas.post import (
 )
 from app.services.post_service import (
     create_post as create_post_service,
-    get_post as get_post_service,
-    get_post_by_slug as get_post_by_slug_service,
+    get_public_post as get_public_post_service,
+    get_public_post_by_slug as get_public_post_by_slug_service,
     list_posts as list_posts_service,
     update_post as update_post_service,
     delete_post as delete_post_service,
@@ -46,12 +46,12 @@ async def list_posts(
 
 @router.get("/{post_id}", response_model=PostResponse)
 async def get_post(post_id: int, db: AsyncSession = Depends(get_db)) -> PostResponse:
-    post = await get_post_service(db, post_id)
+    post = await get_public_post_service(db, post_id)
     return PostResponse(data=post)
 
 @router.get("/slug/{slug}", response_model=PostResponse)
 async def get_post_by_slug(slug: str, db: AsyncSession = Depends(get_db)) -> PostResponse:
-    post = await get_post_by_slug_service(db, slug)
+    post = await get_public_post_by_slug_service(db, slug)
     return PostResponse(data=post)
 
 @router.post("", response_model=PostResponse, status_code=status.HTTP_201_CREATED)

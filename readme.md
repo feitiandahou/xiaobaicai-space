@@ -38,16 +38,25 @@ npm install
 
 npm run dev
 
-++++++++++
++++++++++++++++++++++++++++++++++++++++++
 
 cd backend
 
 Rename ".env.example" File to ".env" 
 and fill in your database information 
 
-import database file (backend/mysql.sql)
 
 uv sync
+
+# init database
+(in mysql)
+CREATE DATABASE xiaobaicai CHARACTER SET utf8mb4 
+
+cd backend
+
+COLLATE utf8mb4_unicode_ci;
+
+uv run alembic upgrade head
 
 uv run uvicorn app.main:app --reload
 

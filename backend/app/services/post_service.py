@@ -24,6 +24,14 @@ class PostPermissionError(PostServiceError):
     pass
 
 
+async def _commit_post_write(db: AsyncSession, message: str) -> None:
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise PostConflictError(message) from exc
+
+
 def _is_admin(actor: User) -> bool:
     return actor.role == "admin"
 
@@ -116,6 +124,36 @@ async def _get_post_by_slug_or_raise(
         raise PostNotFoundError(f"Post with slug '{slug}' not found")
     return post
 
+
+async def _get_public_post_or_raise(db: AsyncSession, post_id: int) -> Post:
+    stmt = _post_query().where(
+        Post.id == post_id,
+        Post.is_delete == 0,
+        Post.status == 1,
+    )
+    post = await db.scalar(stmt)
+    if post is None:
+        raise PostNotFoundError(f"Post with id {post_id} not found")
+    return post
+
+
+async def _get_public_post_by_slug_or_raise(db: AsyncSession, slug: str) -> Post:
+    stmt = _post_query().where(
+        Post.slug == slug,
+        Post.is_delete == 0,
+        Post.status == 1,
+    )
+    post = await db.scalar(stmt)
+    if post is None:
+        raise PostNotFoundError(f"Post with slug '{slug}' not found")
+    return post
+
+
+async def _get_manageable_post_or_raise(db: AsyncSession, post_id: int, *, actor: User) -> Post:
+    post = await _get_post_or_raise(db, post_id, include_deleted=False)
+    _ensure_can_manage_post(actor, post)
+    return post
+
 async def _ensure_user_exists(db: AsyncSession, user_id: int) -> None:
     user = await db.get(User, user_id)
     if user is None:
@@ -185,17 +223,12 @@ async def list_posts(
     posts = await db.scalars(stmt)
     return [_serialize_post_list_item(post) for post in posts]
 
-async def get_post(db: AsyncSession, post_id: int, *, include_deleted: bool = False) -> PostOut:
-    post = await _get_post_or_raise(db, post_id, include_deleted=include_deleted)
+async def get_public_post(db: AsyncSession, post_id: int) -> PostOut:
+    post = await _get_public_post_or_raise(db, post_id)
     return _serialize_post(post)
 
-async def get_post_by_slug(
-        db: AsyncSession,
-        slug: str,
-        *,
-        include_deleted: bool = False,
-) -> PostOut:
-    post = await _get_post_by_slug_or_raise(db, slug, include_deleted=include_deleted)
+async def get_public_post_by_slug(db: AsyncSession, slug: str) -> PostOut:
+    post = await _get_public_post_by_slug_or_raise(db, slug)
     return _serialize_post(post)
 
 async def create_post(db: AsyncSession, payload: PostCreate, *, actor: User) -> PostOut:
@@ -208,14 +241,13 @@ async def create_post(db: AsyncSession, payload: PostCreate, *, actor: User) -> 
     post = Post(**payload.model_dump(exclude={"tag_ids"}))
     post.tags = tags
     db.add(post)
-    await db.commit()
+    await _commit_post_write(db, "Post already exists")
 
     create_post = await _get_post_or_raise(db, int(post.id), include_deleted=True)
     return _serialize_post(create_post)
 
 async def update_post(db: AsyncSession, post_id: int, payload: PostUpdate, *, actor: User) -> PostOut:
-    post = await _get_post_or_raise(db, post_id, include_deleted=False)
-    _ensure_can_manage_post(actor, post)
+    post = await _get_manageable_post_or_raise(db, post_id, actor=actor)
     update_data = payload.model_dump(exclude_unset=True, exclude={"tag_ids"})
 
     if "slug" in update_data:
@@ -229,16 +261,15 @@ async def update_post(db: AsyncSession, post_id: int, payload: PostUpdate, *, ac
     if payload.tag_ids is not None:
         post.tags = await _load_tags(db, payload.tag_ids)
     
-    await db.commit()
+    await _commit_post_write(db, "Post update conflicts with existing data")
 
     update_post = await _get_post_or_raise(db, post_id, include_deleted=False)
     return _serialize_post(update_post)
 
 async def delete_post(db: AsyncSession, post_id: int, *, actor: User) -> None:
-    post = await _get_post_or_raise(db, post_id, include_deleted=False)
-    _ensure_can_manage_post(actor, post)
+    post = await _get_manageable_post_or_raise(db, post_id, actor=actor)
     post.is_delete = 1
-    await db.commit()
+    await _commit_post_write(db, "Post deletion failed")
 
 #No user plagiarism check and concurrency detection, abandoned
 #async def like_post(db: AsyncSession, slug: str) -> int:

@@ -1,30 +1,40 @@
-import os
-from dotenv import load_dotenv
+from functools import lru_cache
+from pathlib import Path
 
-load_dotenv()
-
-
-def _require_env(name: str) -> str:
-    value = os.getenv(name)
-    if value is None or value == "":
-        raise RuntimeError(f"Missing required environment variable: {name}")
-    return value
+from pydantic import Field, ValidationError, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings:
-    #Database settings
-    DB_USER: str = _require_env("DB_USER")
-    DB_PASSWORD: str = _require_env("DB_PASSWORD")
-    DB_HOST: str = _require_env("DB_HOST")
-    DB_PORT: int = int(os.getenv("DB_PORT", 3306))
-    DB_NAME: str = _require_env("DB_NAME")
-    DB_ECHO: bool = os.getenv("DB_ECHO", "true").lower() == "true"
-    JWT_SECRET_KEY: str = os.getenv(
-        "JWT_SECRET_KEY",
-        "dev-only-change-me-please-override-with-a-long-random-secret-key",
+ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=ENV_FILE,
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
-    JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 60))
+
+    DB_USER: str = Field(min_length=1)
+    DB_PASSWORD: str = Field(min_length=1)
+    DB_HOST: str = Field(min_length=1)
+    DB_PORT: int = Field(default=3306, ge=1, le=65535)
+    DB_NAME: str = Field(min_length=1)
+    DB_ECHO: bool = True
+    JWT_SECRET_KEY: str = Field(
+        default="dev-only-change-me-please-override-with-a-long-random-secret-key",
+        min_length=32,
+    )
+    JWT_ALGORITHM: str = Field(default="HS256", min_length=1)
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60, gt=0)
+
+    @field_validator("DB_USER", "DB_PASSWORD", "DB_HOST", "DB_NAME", "JWT_ALGORITHM")
+    @classmethod
+    def _strip_required_strings(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("must not be empty")
+        return cleaned
 
     @property
     def DATABASE_URL(self) -> str:
@@ -35,4 +45,12 @@ class Settings:
         )
 
 
-settings = Settings()
+@lru_cache
+def get_settings() -> Settings:
+    try:
+        return Settings()  # pyright: ignore[reportCallIssue]
+    except ValidationError as exc:
+        raise RuntimeError(f"Invalid application settings: {exc}") from exc
+
+
+settings = get_settings()
