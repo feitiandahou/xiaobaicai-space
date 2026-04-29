@@ -184,6 +184,33 @@ def test_update_category_rejects_self_parent(monkeypatch: pytest.MonkeyPatch) ->
         )
 
 
+def test_update_category_rejects_parent_cycle() -> None:
+    actor = cast(User, SimpleNamespace(id=1, role="admin"))
+    category = SimpleNamespace(id=10, parent_id=20)
+    parent_category = SimpleNamespace(id=20, parent_id=10)
+
+    class FakeDb:
+        async def get(self, model, category_id):
+            if category_id == 10:
+                return category
+            if category_id == 20:
+                return parent_category
+            return None
+
+        async def scalar(self, stmt):
+            return None
+
+    with pytest.raises(CategoryValidationError, match="cannot create a cycle"):
+        pytest.importorskip("asyncio").run(
+            update_category(
+                cast(AsyncSession, FakeDb()),
+                10,
+                CategoryUpdate(parent_id=20),
+                actor=actor,
+            )
+        )
+
+
 def test_create_category_conflict_uses_specific_code(category_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
     admin_user = cast(User, SimpleNamespace(id=1, role="admin", is_active=1))
 

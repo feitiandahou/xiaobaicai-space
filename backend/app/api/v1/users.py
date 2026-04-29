@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, Request, status
+from typing import Literal
+
+from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.audit import build_audit_context
@@ -34,12 +36,28 @@ router = APIRouter(prefix="/users", tags=["users"])
 admin_router = APIRouter(prefix="/users", tags=["admin-users"])
 
 
-@admin_router.get("", response_model=UserListResponse, responses=build_error_responses(401, 403))
+@admin_router.get("", response_model=UserListResponse, responses=build_error_responses(401, 403, 422))
 async def list_users(
+    search: str | None = Query(None, min_length=1, max_length=100),
+    is_active: bool | None = Query(None),
+    role: Literal["user", "admin"] | None = Query(None),
+    sort_by: Literal["created_at", "updated_at", "username"] = Query("created_at"),
+    sort_order: Literal["asc", "desc"] = Query("desc"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_admin),
 ) -> UserListResponse:
-    users = await list_users_service(db)
+    users = await list_users_service(
+        db,
+        search=search,
+        is_active=is_active,
+        role=role,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        page=page,
+        page_size=page_size,
+    )
     return present_user_list_response(users)
 
 

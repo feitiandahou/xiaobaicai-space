@@ -52,6 +52,17 @@ class PostReadModel:
 
 
 @dataclass(slots=True, frozen=True)
+class PostListPageReadModel:
+    data: list[PostReadModel] = field(default_factory=list)
+    page: int = 1
+    page_size: int = 10
+    total: int = 0
+    total_pages: int = 0
+    has_next: bool = False
+    has_prev: bool = False
+
+
+@dataclass(slots=True, frozen=True)
 class UserReadModel:
     id: int
     username: str
@@ -66,11 +77,59 @@ class UserReadModel:
 
 
 @dataclass(slots=True, frozen=True)
+class UserListPageReadModel:
+    data: list[UserReadModel] = field(default_factory=list)
+    page: int = 1
+    page_size: int = 10
+    total: int = 0
+    total_pages: int = 0
+    has_next: bool = False
+    has_prev: bool = False
+
+
+@dataclass(slots=True, frozen=True)
 class SettingReadModel:
     id: int
     key: str
     value: str | None
     updated_at: datetime
+
+
+@dataclass(slots=True, frozen=True)
+class SiteLinkReadModel:
+    name: str
+    url: str
+    icon: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class SiteFooterReadModel:
+    text: str | None = None
+    copyright: str | None = None
+    links: list[SiteLinkReadModel] = field(default_factory=list)
+
+
+@dataclass(slots=True, frozen=True)
+class SiteConfigReadModel:
+    title: str
+    subtitle: str | None = None
+    description: str | None = None
+    icp_beian: str | None = None
+    social_links: list[SiteLinkReadModel] = field(default_factory=list)
+    footer: SiteFooterReadModel = field(default_factory=SiteFooterReadModel)
+    updated_at: datetime | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class AdminDashboardReadModel:
+    total_posts: int
+    published_posts: int
+    draft_posts: int
+    category_count: int
+    tag_count: int
+    posts_created_last_7_days: int
+    recent_logs: list[AdminLogReadModel] = field(default_factory=list)
+    generated_at: datetime = field(default_factory=datetime.utcnow)
 
 
 @dataclass(slots=True, frozen=True)
@@ -84,3 +143,14 @@ class AdminLogReadModel:
     user_agent: str | None
     os_info: str | None
     created_at: datetime
+
+
+@dataclass(slots=True, frozen=True)
+class AdminLogListPageReadModel:
+    data: list[AdminLogReadModel] = field(default_factory=list)
+    page: int = 1
+    page_size: int = 10
+    total: int = 0
+    total_pages: int = 0
+    has_next: bool = False
+    has_prev: bool = False

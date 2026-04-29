@@ -89,8 +89,18 @@ class UserResponse(BaseModel):
     data: UserOut
 
 
+class UserListMeta(BaseModel):
+    page: int
+    page_size: int
+    total: int
+    total_pages: int
+    has_next: bool
+    has_prev: bool
+
+
 class UserListResponse(BaseModel):
     data: list[UserOut]
+    meta: UserListMeta
 
 
 class TokenResponse(BaseModel):

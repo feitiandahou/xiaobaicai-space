@@ -1,3 +1,5 @@
+from datetime import datetime
+from typing import Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Cookie, Request, Response, status, Query, Depends
@@ -26,7 +28,7 @@ from app.services.queries.posts import (
     list_public_posts as list_public_posts_service,
 )
 from app.core.database import get_db
-from app.core.security import get_current_admin, get_current_user
+from app.core.security import get_current_admin
 from app.models.user import User
 
 router = APIRouter(prefix="/posts", tags=["posts"])
@@ -35,11 +37,17 @@ admin_router = APIRouter(prefix="/posts", tags=["admin-posts"])
 @router.get("", response_model=PostListResponse, responses=build_error_responses(422))
 async def list_posts(
     category_id: int | None = Query(None, ge=1),
+    search: str | None = Query(None, min_length=1, max_length=100),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
     db: AsyncSession = Depends(get_db)
 ) -> PostListResponse:
     posts = await list_public_posts_service(
         db,
         category_id=category_id,
+        search=search,
+        page=page,
+        page_size=page_size,
     )
     return present_post_list_response(posts)
 
@@ -50,6 +58,14 @@ async def list_manage_posts(
     include_deleted: bool = Query(False),
     status_filter: int | None = Query(None, alias="status", ge=0, le=2),
     category_id: int | None = Query(None, ge=1),
+    author_id: int | None = Query(None, ge=1),
+    search: str | None = Query(None, min_length=1, max_length=100),
+    created_from: datetime | None = Query(None),
+    created_to: datetime | None = Query(None),
+    sort_by: Literal["created_at", "published_at", "view_count"] = Query("published_at"),
+    sort_order: Literal["asc", "desc"] = Query("desc"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_admin),
 ) -> PostListResponse:
@@ -59,6 +75,14 @@ async def list_manage_posts(
         include_deleted=include_deleted,
         status=status_filter,
         category_id=category_id,
+        author_id=author_id,
+        search=search,
+        created_from=created_from,
+        created_to=created_to,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        page=page,
+        page_size=page_size,
     )
     return present_post_list_response(posts)
 
@@ -77,7 +101,7 @@ async def create_post(
     payload: PostCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_admin),
 ) -> PostResponse:
     post = await create_post_service(db, payload, actor=current_user, audit_context=build_audit_context(request))
     return PostResponse(data=present_post_out(post))
@@ -88,7 +112,7 @@ async def update_post(
     payload: PostUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_admin),
 ) -> PostResponse:
     post = await update_post_service(db, post_id, payload, actor=current_user, audit_context=build_audit_context(request))
     return PostResponse(data=present_post_out(post))
@@ -98,7 +122,7 @@ async def delete_post(
     post_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_admin),
 ) -> MessageResponse:
     await delete_post_service(db, post_id, actor=current_user, audit_context=build_audit_context(request))
     return MessageResponse(message="Post deleted successfully")

@@ -2,6 +2,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.assemblers import to_user_read_model
+from app.core.admin_actions import AdminAction
 from app.core.read_models import UserReadModel
 from app.models.user import User
 from app.schemas.user import ChangePasswordRequest, UserCreate, UserStatusUpdate, UserUpdate
@@ -83,6 +84,7 @@ async def update_user(
     audit_context: AuditContext | None = None,
 ) -> UserReadModel:
     _ensure_can_access_user(actor, user_id)
+    actor_role_before_update = actor.role
     user = await _get_user_or_raise(db, user_id)
     update_data = payload.model_dump(exclude_unset=True)
 
@@ -109,9 +111,10 @@ async def update_user(
     await record_admin_action(
         db,
         actor=actor,
-        action="update_user",
+        action=AdminAction.UPDATE_USER,
         detail=f"Updated user {user_read_model.id} ({user_read_model.username})",
         audit_context=audit_context,
+        actor_role_override=actor_role_before_update,
     )
     return user_read_model
 
@@ -142,7 +145,7 @@ async def change_password(
     await record_admin_action(
         db,
         actor=actor,
-        action="change_password",
+        action=AdminAction.CHANGE_PASSWORD,
         detail=f"Changed password for user {user_id}",
         audit_context=audit_context,
     )
@@ -171,7 +174,7 @@ async def update_user_status(
     await record_admin_action(
         db,
         actor=actor,
-        action="update_user_status",
+        action=AdminAction.UPDATE_USER_STATUS,
         detail=f"Updated user status {user_read_model.id} ({user_read_model.username}) to is_active={user_read_model.is_active}",
         audit_context=audit_context,
     )

@@ -65,12 +65,22 @@ class PostListItem(BaseModel):
 	tags: list[str] = Field(default_factory=list)
 
 
+class PaginationMeta(BaseModel):
+	page: int
+	page_size: int
+	total: int
+	total_pages: int
+	has_next: bool
+	has_prev: bool
+
+
 class PostResponse(BaseModel):
 	data: PostOut
 
 
 class PostListResponse(BaseModel):
 	data: list[PostListItem]
+	meta: PaginationMeta
 
 
 class PostLikeResponse(BaseModel):

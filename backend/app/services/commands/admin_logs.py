@@ -13,7 +13,7 @@ async def record_admin_log(db: AsyncSession, payload: AdminLogCreate, *, actor: 
     log = AdminLog(
         admin_id=int(actor.id),
         admin_name=getattr(actor, "username", None),
-        action=payload.action,
+        action=payload.action.value,
         detail=payload.detail,
         ip_address=payload.ip_address,
         user_agent=payload.user_agent,

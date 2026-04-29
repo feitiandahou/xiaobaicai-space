@@ -18,3 +18,4 @@ Rules:
 - Commands may call query helpers, but command orchestration stays on the write side.
 - Commands should emit audit records for successful admin writes.
 - Audit failure must not invalidate a business write that has already committed.
+- Admin audit action names must come from `app.core.admin_actions.AdminAction`; do not introduce free-form action strings in command services.

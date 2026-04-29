@@ -5,6 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.assemblers import to_post_read_model
+from app.core.admin_actions import AdminAction
 from app.models.category import Category
 from app.models.post import Post
 from app.models.post_like import PostLike
@@ -105,7 +106,7 @@ async def create_post(
     await record_admin_action(
         db,
         actor=actor,
-        action="create_post",
+        action=AdminAction.CREATE_POST,
         detail=f"Created post {post_read_model.id} ({post_read_model.slug})",
         audit_context=audit_context,
     )
@@ -141,7 +142,7 @@ async def update_post(
     await record_admin_action(
         db,
         actor=actor,
-        action="update_post",
+        action=AdminAction.UPDATE_POST,
         detail=f"Updated post {post_read_model.id} ({post_read_model.slug})",
         audit_context=audit_context,
     )
@@ -161,7 +162,7 @@ async def delete_post(
     await record_admin_action(
         db,
         actor=actor,
-        action="delete_post",
+        action=AdminAction.DELETE_POST,
         detail=f"Deleted post {post_id} ({post.slug})",
         audit_context=audit_context,
     )

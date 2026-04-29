@@ -1,5 +1,5 @@
-from app.core.read_models import AdminLogReadModel
-from app.schemas.admin_log import AdminLogListResponse, AdminLogOut
+from app.core.read_models import AdminLogListPageReadModel, AdminLogReadModel
+from app.schemas.admin_log import AdminLogListMeta, AdminLogListResponse, AdminLogOut
 
 
 def present_admin_log_out(log: AdminLogReadModel) -> AdminLogOut:
@@ -16,5 +16,15 @@ def present_admin_log_out(log: AdminLogReadModel) -> AdminLogOut:
     )
 
 
-def present_admin_log_list_response(logs: list[AdminLogReadModel]) -> AdminLogListResponse:
-    return AdminLogListResponse(data=[present_admin_log_out(log) for log in logs])
+def present_admin_log_list_response(logs: AdminLogListPageReadModel) -> AdminLogListResponse:
+    return AdminLogListResponse(
+        data=[present_admin_log_out(log) for log in logs.data],
+        meta=AdminLogListMeta(
+            page=logs.page,
+            page_size=logs.page_size,
+            total=logs.total,
+            total_pages=logs.total_pages,
+            has_next=logs.has_next,
+            has_prev=logs.has_prev,
+        ),
+    )

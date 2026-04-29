@@ -14,6 +14,7 @@ from app.api.v1.admin import router as admin_api_router
 from app.core.database import get_db
 from app.core.error_codes import ErrorCode
 from app.core.exception_handlers import register_exception_handlers
+from app.core.read_models import UserListPageReadModel, UserReadModel
 from app.core.security import create_access_token, get_current_admin, get_current_user
 from app.core.errors import AuthenticationRequiredError, PermissionDeniedError
 from app.models.user import User
@@ -64,6 +65,33 @@ def _user_payload(user_id: int = 1, *, role: str = "user", is_active: bool = Tru
     }
 
 
+def _user_read_model(user_id: int = 1, *, role: str = "user", is_active: bool = True) -> UserReadModel:
+    return UserReadModel(
+        id=user_id,
+        username=f"user-{user_id}",
+        email=f"user{user_id}@example.com",
+        avatar=None,
+        bio=None,
+        role=role,
+        is_active=is_active,
+        social_links={},
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+    )
+
+
+def _user_page_payload() -> UserListPageReadModel:
+    return UserListPageReadModel(
+        data=[_user_read_model()],
+        page=1,
+        page_size=10,
+        total=1,
+        total_pages=1,
+        has_next=False,
+        has_prev=False,
+    )
+
+
 def test_list_users_requires_admin(user_app: FastAPI) -> None:
     async def deny_admin():
         from fastapi import status
@@ -78,6 +106,115 @@ def test_list_users_requires_admin(user_app: FastAPI) -> None:
     assert response.status_code == 403
 
 
+def test_list_users_passes_pagination(user_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    admin_user = cast(User, SimpleNamespace(id=1, role="admin", is_active=1))
+    list_users_mock = AsyncMock(return_value=_user_page_payload())
+
+    async def override_current_admin() -> User:
+        return admin_user
+
+    user_app.dependency_overrides[get_current_admin] = override_current_admin
+    monkeypatch.setattr(users_api, "list_users_service", list_users_mock)
+
+    with TestClient(user_app) as client:
+        response = client.get("/api/v1/admin/users", params={"page": "2", "page_size": "5"})
+
+    assert response.status_code == 200
+    assert response.json()["meta"]["page"] == 1
+    assert list_users_mock.await_args is not None
+    _, kwargs = list_users_mock.await_args
+    assert kwargs == {
+        "search": None,
+        "is_active": None,
+        "role": None,
+        "sort_by": "created_at",
+        "sort_order": "desc",
+        "page": 2,
+        "page_size": 5,
+    }
+
+
+def test_list_users_passes_search_and_status_filters(user_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    admin_user = cast(User, SimpleNamespace(id=1, role="admin", is_active=1))
+    list_users_mock = AsyncMock(return_value=_user_page_payload())
+
+    async def override_current_admin() -> User:
+        return admin_user
+
+    user_app.dependency_overrides[get_current_admin] = override_current_admin
+    monkeypatch.setattr(users_api, "list_users_service", list_users_mock)
+
+    with TestClient(user_app) as client:
+        response = client.get("/api/v1/admin/users", params={"search": "alice", "is_active": "true", "page": "1", "page_size": "10"})
+
+    assert response.status_code == 200
+    assert list_users_mock.await_args is not None
+    _, kwargs = list_users_mock.await_args
+    assert kwargs == {
+        "search": "alice",
+        "is_active": True,
+        "role": None,
+        "sort_by": "created_at",
+        "sort_order": "desc",
+        "page": 1,
+        "page_size": 10,
+    }
+
+
+def test_list_users_passes_role_filter(user_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    admin_user = cast(User, SimpleNamespace(id=1, role="admin", is_active=1))
+    list_users_mock = AsyncMock(return_value=_user_page_payload())
+
+    async def override_current_admin() -> User:
+        return admin_user
+
+    user_app.dependency_overrides[get_current_admin] = override_current_admin
+    monkeypatch.setattr(users_api, "list_users_service", list_users_mock)
+
+    with TestClient(user_app) as client:
+        response = client.get("/api/v1/admin/users", params={"role": "admin"})
+
+    assert response.status_code == 200
+    assert list_users_mock.await_args is not None
+    _, kwargs = list_users_mock.await_args
+    assert kwargs == {
+        "search": None,
+        "is_active": None,
+        "role": "admin",
+        "sort_by": "created_at",
+        "sort_order": "desc",
+        "page": 1,
+        "page_size": 10,
+    }
+
+
+def test_list_users_passes_sorting(user_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    admin_user = cast(User, SimpleNamespace(id=1, role="admin", is_active=1))
+    list_users_mock = AsyncMock(return_value=_user_page_payload())
+
+    async def override_current_admin() -> User:
+        return admin_user
+
+    user_app.dependency_overrides[get_current_admin] = override_current_admin
+    monkeypatch.setattr(users_api, "list_users_service", list_users_mock)
+
+    with TestClient(user_app) as client:
+        response = client.get("/api/v1/admin/users", params={"sort_by": "username", "sort_order": "asc"})
+
+    assert response.status_code == 200
+    assert list_users_mock.await_args is not None
+    _, kwargs = list_users_mock.await_args
+    assert kwargs == {
+        "search": None,
+        "is_active": None,
+        "role": None,
+        "sort_by": "username",
+        "sort_order": "asc",
+        "page": 1,
+        "page_size": 10,
+    }
+
+
 def test_users_openapi_declares_unified_error_models(user_app: FastAPI) -> None:
     schema = user_app.openapi()
     login_operation = schema["paths"]["/api/v1/users/login"]["post"]
@@ -89,6 +226,85 @@ def test_users_openapi_declares_unified_error_models(user_app: FastAPI) -> None:
         "code": ErrorCode.AUTHENTICATION_REQUIRED.value,
         "detail": "Authentication required",
     }
+
+
+def test_list_users_query_applies_limit_and_offset() -> None:
+    captured_scalars_stmt = None
+    captured_count_stmt = None
+
+    class CapturingDb:
+        async def scalars(self, stmt):
+            nonlocal captured_scalars_stmt
+            captured_scalars_stmt = stmt
+            return []
+
+        async def scalar(self, stmt):
+            nonlocal captured_count_stmt
+            captured_count_stmt = stmt
+            return 0
+
+    result = asyncio.run(users_api.list_users_service(cast(AsyncSession, CapturingDb()), page=2, page_size=5))
+
+    assert result.total == 0
+    assert captured_scalars_stmt is not None
+    assert "LIMIT :param_1 OFFSET :param_2" in str(captured_scalars_stmt)
+    assert captured_count_stmt is not None
+
+
+def test_list_users_query_applies_search_and_status_filters() -> None:
+    captured_scalars_stmt = None
+
+    class CapturingDb:
+        async def scalars(self, stmt):
+            nonlocal captured_scalars_stmt
+            captured_scalars_stmt = stmt
+            return []
+
+        async def scalar(self, stmt):
+            return 0
+
+    result = asyncio.run(
+        users_api.list_users_service(
+            cast(AsyncSession, CapturingDb()),
+            search="alice",
+            is_active=True,
+            role="admin",
+            page=1,
+            page_size=10,
+        )
+    )
+
+    assert result.total == 0
+    assert captured_scalars_stmt is not None
+    compiled = str(captured_scalars_stmt)
+    assert "lower(users.username) LIKE lower(:username_1)" in compiled
+    assert "users.is_active = :is_active_1" in compiled
+    assert "users.role = :role_1" in compiled
+
+
+def test_list_users_query_applies_sorting() -> None:
+    captured_scalars_stmt = None
+
+    class CapturingDb:
+        async def scalars(self, stmt):
+            nonlocal captured_scalars_stmt
+            captured_scalars_stmt = stmt
+            return []
+
+        async def scalar(self, stmt):
+            return 0
+
+    result = asyncio.run(
+        users_api.list_users_service(
+            cast(AsyncSession, CapturingDb()),
+            sort_by="username",
+            sort_order="asc",
+        )
+    )
+
+    assert result.total == 0
+    assert captured_scalars_stmt is not None
+    assert "ORDER BY users.username ASC, users.id ASC" in str(captured_scalars_stmt)
 
 
 def test_login_returns_bearer_token(user_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -282,6 +498,55 @@ def test_update_user_rejects_non_admin_role_change() -> None:
 
     with pytest.raises(UserPermissionError):
         asyncio.run(update_user(cast(AsyncSession, FakeDB()), 2, UserUpdate(role="admin"), actor=actor))
+
+
+def test_update_user_self_role_change_preserves_admin_audit(monkeypatch: pytest.MonkeyPatch) -> None:
+    actor = cast(User, SimpleNamespace(
+        id=1,
+        username="admin",
+        password="hashed",
+        email="admin@example.com",
+        avatar=None,
+        bio=None,
+        role="admin",
+        is_active=1,
+        social_links={},
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+    ))
+    audit_mock = AsyncMock()
+
+    class FakeDB:
+        async def get(self, model, user_id):
+            return actor
+
+        async def scalar(self, stmt):
+            return None
+
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+    monkeypatch.setattr("app.services.commands.users.record_admin_action", audit_mock)
+
+    result = asyncio.run(
+        update_user(
+            cast(AsyncSession, FakeDB()),
+            1,
+            UserUpdate(role="user"),
+            actor=actor,
+            audit_context=AuditContext(ip_address="127.0.0.1"),
+        )
+    )
+
+    assert result.role == "user"
+    assert actor.role == "user"
+    audit_mock.assert_awaited_once()
+    assert audit_mock.await_args is not None
+    _, kwargs = audit_mock.await_args
+    assert kwargs["actor_role_override"] == "admin"
 
 
 def test_authenticate_user_rejects_disabled_account(monkeypatch: pytest.MonkeyPatch) -> None:

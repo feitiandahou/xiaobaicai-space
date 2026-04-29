@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock
@@ -14,6 +15,7 @@ from app.api.v1.admin import router as admin_api_router
 from app.core.exception_handlers import register_exception_handlers
 from app.core.error_codes import ErrorCode
 from app.core.database import get_db
+from app.core.read_models import PostListPageReadModel, PostReadModel
 from app.core.security import get_current_admin, get_current_user
 from app.models.user import User
 from app.schemas.post import PostCreate, PostUpdate
@@ -37,8 +39,8 @@ async def _override_db():
     yield object()
 
 
-def _post_payload(post_id: int = 1) -> SimpleNamespace:
-    return SimpleNamespace(
+def _post_payload(post_id: int = 1) -> PostReadModel:
+    return PostReadModel(
         id=post_id,
         user_id=1,
         title="hello",
@@ -53,8 +55,8 @@ def _post_payload(post_id: int = 1) -> SimpleNamespace:
         is_delete=0,
         view_count=0,
         like_count=0,
-        created_at="2024-01-01T00:00:00",
-        updated_at="2024-01-01T00:00:00",
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
         tag_ids=[],
         tags=[],
     )
@@ -62,6 +64,18 @@ def _post_payload(post_id: int = 1) -> SimpleNamespace:
 
 def _integrity_error() -> IntegrityError:
     return IntegrityError("statement", {}, Exception("boom"))
+
+
+def _post_page_payload() -> PostListPageReadModel:
+    return PostListPageReadModel(
+        data=[_post_payload()],
+        page=1,
+        page_size=10,
+        total=1,
+        total_pages=1,
+        has_next=False,
+        has_prev=False,
+    )
 
 
 @pytest.fixture
@@ -75,7 +89,7 @@ def post_app() -> FastAPI:
 
 
 def test_public_list_posts_enforces_published_only(post_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
-    list_posts_mock = AsyncMock(return_value=[])
+    list_posts_mock = AsyncMock(return_value=_post_page_payload())
     monkeypatch.setattr(posts_api, "list_public_posts_service", list_posts_mock)
 
     with TestClient(post_app) as client:
@@ -88,7 +102,8 @@ def test_public_list_posts_enforces_published_only(post_app: FastAPI, monkeypatc
     list_posts_mock.assert_awaited_once()
     assert list_posts_mock.await_args is not None
     _, kwargs = list_posts_mock.await_args
-    assert kwargs == {"category_id": 3}
+    assert kwargs == {"category_id": 3, "search": None, "page": 1, "page_size": 10}
+    assert response.json()["meta"]["total"] == 1
 
 
 def test_post_list_validation_uses_unified_error_shape(post_app: FastAPI) -> None:
@@ -103,7 +118,7 @@ def test_post_list_validation_uses_unified_error_shape(post_app: FastAPI) -> Non
 
 
 def test_manage_list_posts_passes_include_flags(post_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
-    list_posts_mock = AsyncMock(return_value=[])
+    list_posts_mock = AsyncMock(return_value=_post_page_payload())
     app_admin = cast(User, SimpleNamespace(id=1, role="admin", is_active=True))
 
     async def override_current_admin() -> User:
@@ -126,6 +141,14 @@ def test_manage_list_posts_passes_include_flags(post_app: FastAPI, monkeypatch: 
     assert kwargs["include_deleted"] is True
     assert kwargs["status"] == 0
     assert kwargs["category_id"] == 3
+    assert kwargs["author_id"] is None
+    assert kwargs["search"] is None
+    assert kwargs["created_from"] is None
+    assert kwargs["created_to"] is None
+    assert kwargs["sort_by"] == "published_at"
+    assert kwargs["sort_order"] == "desc"
+    assert kwargs["page"] == 1
+    assert kwargs["page_size"] == 10
 
 
 def test_manage_list_posts_requires_admin(post_app: FastAPI) -> None:
@@ -135,6 +158,57 @@ def test_manage_list_posts_requires_admin(post_app: FastAPI) -> None:
     assert response.status_code == 401
     assert response.json() == {"code": ErrorCode.AUTHENTICATION_REQUIRED.value, "detail": "Authentication required"}
     assert response.headers["www-authenticate"] == "Bearer"
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "json_body"),
+    [
+        ("post", "/api/v1/admin/posts", {"title": "title", "content": "body", "user_id": 7, "tag_ids": []}),
+        ("put", "/api/v1/admin/posts/7", {"title": "updated"}),
+        ("delete", "/api/v1/admin/posts/7", None),
+    ],
+)
+def test_manage_post_write_routes_require_admin(
+    post_app: FastAPI,
+    method: str,
+    path: str,
+    json_body: dict[str, object] | None,
+) -> None:
+    async def override_current_user() -> User:
+        return cast(User, SimpleNamespace(id=7, role="user", is_active=1))
+
+    post_app.dependency_overrides[get_current_user] = override_current_user
+
+    with TestClient(post_app) as client:
+        if json_body is None:
+            response = getattr(client, method)(path)
+        else:
+            response = getattr(client, method)(path, json=json_body)
+
+    assert response.status_code == 403
+    assert response.json() == {"code": ErrorCode.ADMIN_ACCESS_REQUIRED.value, "detail": "Admin access required"}
+
+
+def test_create_post_route_uses_admin_actor(post_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    create_post_mock = AsyncMock(return_value=_post_payload())
+    app_admin = cast(User, SimpleNamespace(id=1, role="admin", is_active=1))
+
+    async def override_current_admin() -> User:
+        return app_admin
+
+    post_app.dependency_overrides[get_current_admin] = override_current_admin
+    monkeypatch.setattr(posts_api, "create_post_service", create_post_mock)
+
+    with TestClient(post_app) as client:
+        response = client.post(
+            "/api/v1/admin/posts",
+            json={"title": "title", "content": "body", "user_id": 1, "tag_ids": []},
+        )
+
+    assert response.status_code == 201
+    assert create_post_mock.await_args is not None
+    _, kwargs = create_post_mock.await_args
+    assert kwargs["actor"] is app_admin
 
 
 def test_posts_openapi_declares_unified_error_models(post_app: FastAPI) -> None:
@@ -151,13 +225,13 @@ def test_posts_openapi_declares_unified_error_models(post_app: FastAPI) -> None:
 
 
 def test_list_public_posts_applies_published_only_filter(monkeypatch: pytest.MonkeyPatch) -> None:
-    list_posts_mock = AsyncMock(return_value=[])
+    list_posts_mock = AsyncMock(return_value=_post_page_payload())
     db = cast(AsyncSession, SimpleNamespace())
     monkeypatch.setattr("app.services.queries.posts.list_posts", list_posts_mock)
 
     result = asyncio.run(list_public_posts(db, category_id=7))
 
-    assert result == []
+    assert result.total == 1
     list_posts_mock.assert_awaited_once_with(
         db,
         published_only=True,
@@ -165,11 +239,19 @@ def test_list_public_posts_applies_published_only_filter(monkeypatch: pytest.Mon
         include_deleted=False,
         status=None,
         category_id=7,
+        author_id=None,
+        search=None,
+        created_from=None,
+        created_to=None,
+        sort_by="published_at",
+        sort_order="desc",
+        page=1,
+        page_size=10,
     )
 
 
 def test_list_manage_posts_passes_management_filters(monkeypatch: pytest.MonkeyPatch) -> None:
-    list_posts_mock = AsyncMock(return_value=[])
+    list_posts_mock = AsyncMock(return_value=_post_page_payload())
     db = cast(AsyncSession, SimpleNamespace())
     monkeypatch.setattr("app.services.queries.posts.list_posts", list_posts_mock)
 
@@ -183,7 +265,7 @@ def test_list_manage_posts_passes_management_filters(monkeypatch: pytest.MonkeyP
         )
     )
 
-    assert result == []
+    assert result.total == 1
     list_posts_mock.assert_awaited_once_with(
         db,
         published_only=False,
@@ -191,7 +273,181 @@ def test_list_manage_posts_passes_management_filters(monkeypatch: pytest.MonkeyP
         include_deleted=True,
         status=2,
         category_id=5,
+        author_id=None,
+        search=None,
+        created_from=None,
+        created_to=None,
+        sort_by="published_at",
+        sort_order="desc",
+        page=1,
+        page_size=10,
     )
+
+
+def test_public_list_posts_passes_search_and_pagination(post_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    list_posts_mock = AsyncMock(return_value=_post_page_payload())
+    monkeypatch.setattr(posts_api, "list_public_posts_service", list_posts_mock)
+
+    with TestClient(post_app) as client:
+        response = client.get("/api/v1/posts", params={"search": "hello", "page": "2", "page_size": "5"})
+
+    assert response.status_code == 200
+    assert list_posts_mock.await_args is not None
+    _, kwargs = list_posts_mock.await_args
+    assert kwargs == {"category_id": None, "search": "hello", "page": 2, "page_size": 5}
+
+
+def test_manage_list_posts_passes_search_and_pagination(post_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    list_posts_mock = AsyncMock(return_value=_post_page_payload())
+    app_admin = cast(User, SimpleNamespace(id=1, role="admin", is_active=True))
+
+    async def override_current_admin() -> User:
+        return app_admin
+
+    post_app.dependency_overrides[get_current_admin] = override_current_admin
+    monkeypatch.setattr(posts_api, "list_manage_posts_service", list_posts_mock)
+
+    with TestClient(post_app) as client:
+        response = client.get("/api/v1/admin/posts", params={"search": "hello", "page": "3", "page_size": "20"})
+
+    assert response.status_code == 200
+    assert list_posts_mock.await_args is not None
+    _, kwargs = list_posts_mock.await_args
+    assert kwargs["search"] == "hello"
+    assert kwargs["sort_by"] == "published_at"
+    assert kwargs["sort_order"] == "desc"
+    assert kwargs["page"] == 3
+    assert kwargs["page_size"] == 20
+
+
+def test_manage_list_posts_passes_author_and_time_filters(post_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    list_posts_mock = AsyncMock(return_value=_post_page_payload())
+    app_admin = cast(User, SimpleNamespace(id=1, role="admin", is_active=True))
+
+    async def override_current_admin() -> User:
+        return app_admin
+
+    post_app.dependency_overrides[get_current_admin] = override_current_admin
+    monkeypatch.setattr(posts_api, "list_manage_posts_service", list_posts_mock)
+
+    with TestClient(post_app) as client:
+        response = client.get(
+            "/api/v1/admin/posts",
+            params={
+                "author_id": "7",
+                "created_from": "2024-01-01T00:00:00",
+                "created_to": "2024-01-31T23:59:59",
+            },
+        )
+
+    assert response.status_code == 200
+    assert list_posts_mock.await_args is not None
+    _, kwargs = list_posts_mock.await_args
+    assert kwargs["author_id"] == 7
+    assert kwargs["created_from"] == datetime(2024, 1, 1, 0, 0, 0)
+    assert kwargs["created_to"] == datetime(2024, 1, 31, 23, 59, 59)
+
+
+def test_manage_list_posts_passes_sorting(post_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    list_posts_mock = AsyncMock(return_value=_post_page_payload())
+    app_admin = cast(User, SimpleNamespace(id=1, role="admin", is_active=True))
+
+    async def override_current_admin() -> User:
+        return app_admin
+
+    post_app.dependency_overrides[get_current_admin] = override_current_admin
+    monkeypatch.setattr(posts_api, "list_manage_posts_service", list_posts_mock)
+
+    with TestClient(post_app) as client:
+        response = client.get("/api/v1/admin/posts", params={"sort_by": "view_count", "sort_order": "asc"})
+
+    assert response.status_code == 200
+    assert list_posts_mock.await_args is not None
+    _, kwargs = list_posts_mock.await_args
+    assert kwargs["sort_by"] == "view_count"
+    assert kwargs["sort_order"] == "asc"
+
+
+def test_post_list_response_includes_pagination_meta(post_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    list_posts_mock = AsyncMock(
+        return_value=PostListPageReadModel(
+            data=[_post_payload()],
+            page=2,
+            page_size=5,
+            total=12,
+            total_pages=3,
+            has_next=True,
+            has_prev=True,
+        )
+    )
+    monkeypatch.setattr(posts_api, "list_public_posts_service", list_posts_mock)
+
+    with TestClient(post_app) as client:
+        response = client.get("/api/v1/posts", params={"page": "2", "page_size": "5"})
+
+    assert response.status_code == 200
+    assert response.json()["meta"] == {
+        "page": 2,
+        "page_size": 5,
+        "total": 12,
+        "total_pages": 3,
+        "has_next": True,
+        "has_prev": True,
+    }
+
+
+def test_list_manage_posts_query_applies_author_and_time_filters() -> None:
+    captured_scalars_stmt = None
+
+    class CapturingDb:
+        async def scalars(self, stmt):
+            nonlocal captured_scalars_stmt
+            captured_scalars_stmt = stmt
+            return []
+
+        async def scalar(self, stmt):
+            return 0
+
+    result = asyncio.run(
+        list_manage_posts(
+            cast(AsyncSession, CapturingDb()),
+            author_id=7,
+            created_from=datetime(2024, 1, 1),
+            created_to=datetime(2024, 1, 31, 23, 59, 59),
+        )
+    )
+
+    assert result.total == 0
+    assert captured_scalars_stmt is not None
+    compiled = str(captured_scalars_stmt)
+    assert "posts.user_id = :user_id_1" in compiled
+    assert "posts.created_at >= :created_at_1" in compiled
+    assert "posts.created_at <= :created_at_2" in compiled
+
+
+def test_list_manage_posts_query_applies_sorting() -> None:
+    captured_scalars_stmt = None
+
+    class CapturingDb:
+        async def scalars(self, stmt):
+            nonlocal captured_scalars_stmt
+            captured_scalars_stmt = stmt
+            return []
+
+        async def scalar(self, stmt):
+            return 0
+
+    result = asyncio.run(
+        list_manage_posts(
+            cast(AsyncSession, CapturingDb()),
+            sort_by="view_count",
+            sort_order="asc",
+        )
+    )
+
+    assert result.total == 0
+    assert captured_scalars_stmt is not None
+    assert "ORDER BY posts.is_top DESC, posts.view_count ASC, posts.id ASC" in str(captured_scalars_stmt)
 
 
 def test_slug_route_is_namespaced(post_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:

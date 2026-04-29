@@ -1,5 +1,5 @@
-from app.core.read_models import PostReadModel
-from app.schemas.post import PostListItem, PostListResponse, PostOut
+from app.core.read_models import PostListPageReadModel, PostReadModel
+from app.schemas.post import PaginationMeta, PostListItem, PostListResponse, PostOut
 
 
 def present_post_out(post: PostReadModel) -> PostOut:
@@ -43,5 +43,15 @@ def present_post_list_item(post: PostReadModel) -> PostListItem:
     )
 
 
-def present_post_list_response(posts: list[PostReadModel]) -> PostListResponse:
-    return PostListResponse(data=[present_post_list_item(post) for post in posts])
+def present_post_list_response(posts: PostListPageReadModel) -> PostListResponse:
+    return PostListResponse(
+        data=[present_post_list_item(post) for post in posts.data],
+        meta=PaginationMeta(
+            page=posts.page,
+            page_size=posts.page_size,
+            total=posts.total,
+            total_pages=posts.total_pages,
+            has_next=posts.has_next,
+            has_prev=posts.has_prev,
+        ),
+    )

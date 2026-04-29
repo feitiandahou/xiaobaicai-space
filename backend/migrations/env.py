@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -13,7 +14,7 @@ import app.models  # noqa: F401
 
 config = context.config
 # Use the application settings as the single source of truth for the database URL.
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+config.set_main_option("sqlalchemy.url", os.getenv("ALEMBIC_DATABASE_URL") or settings.DATABASE_URL)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

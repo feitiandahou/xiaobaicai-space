@@ -6,20 +6,28 @@ from app.api.responses import build_error_responses
 from app.core.database import get_db
 from app.core.security import get_current_admin
 from app.models.user import User
-from app.presenters import present_setting_list_response, present_setting_out
+from app.presenters import present_setting_list_response, present_setting_out, present_site_config_response
 from app.schemas.post import MessageResponse
-from app.schemas.setting import SettingListResponse, SettingResponse, SettingValueUpdate
+from app.schemas.setting import SettingListResponse, SettingResponse, SettingValueUpdate, SiteConfigResponse
 from app.services.commands.settings import (
     delete_setting as delete_setting_service,
     upsert_setting as upsert_setting_service,
 )
 from app.services.queries.settings import (
     get_setting as get_setting_service,
+    get_public_site_config as get_public_site_config_service,
     list_settings as list_settings_service,
 )
 
 
+router = APIRouter(prefix="/site-config", tags=["site-config"])
 admin_router = APIRouter(prefix="/settings", tags=["admin-settings"])
+
+
+@router.get("", response_model=SiteConfigResponse)
+async def get_public_site_config(db: AsyncSession = Depends(get_db)) -> SiteConfigResponse:
+    site_config = await get_public_site_config_service(db)
+    return present_site_config_response(site_config)
 
 
 @admin_router.get("", response_model=SettingListResponse, responses=build_error_responses(401, 403))

@@ -3,6 +3,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.assemblers import to_setting_read_model
+from app.core.admin_actions import AdminAction
 from app.core.read_models import SettingReadModel
 from app.models.setting import Setting
 from app.models.user import User
@@ -36,7 +37,7 @@ async def upsert_setting(
     await record_admin_action(
         db,
         actor=actor,
-        action="upsert_setting",
+        action=AdminAction.UPSERT_SETTING,
         detail=f"Upserted setting {setting_read_model.key}",
         audit_context=audit_context,
     )
@@ -61,7 +62,7 @@ async def delete_setting(
     await record_admin_action(
         db,
         actor=actor,
-        action="delete_setting",
+        action=AdminAction.DELETE_SETTING,
         detail=f"Deleted setting {key}",
         audit_context=audit_context,
     )

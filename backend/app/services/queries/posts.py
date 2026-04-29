@@ -1,11 +1,15 @@
-from sqlalchemy import select
+from datetime import datetime
+from math import ceil
+from typing import Literal
+
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.assemblers import to_post_read_model
 from app.core.error_codes import ErrorCode
 from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError, ValidationAppError
-from app.core.read_models import PostReadModel
+from app.core.read_models import PostListPageReadModel, PostReadModel
 from app.models.post import Post
 from app.models.user import User
 
@@ -50,6 +54,66 @@ def _ensure_can_manage_post(actor: User, post: Post) -> None:
 
 def _post_query():
     return select(Post).options(selectinload(Post.tags))
+
+
+def _apply_post_sorting(
+    stmt,
+    *,
+    sort_by: Literal["created_at", "published_at", "view_count"],
+    sort_order: Literal["asc", "desc"],
+):
+    sort_columns = {
+        "created_at": Post.created_at,
+        "published_at": Post.published_at,
+        "view_count": Post.view_count,
+    }
+    sort_column = sort_columns[sort_by]
+    if sort_order == "asc":
+        return stmt.order_by(Post.is_top.desc(), sort_column.asc(), Post.id.asc())
+    return stmt.order_by(Post.is_top.desc(), sort_column.desc(), Post.id.desc())
+
+
+def _apply_post_filters(
+    stmt,
+    *,
+    published_only: bool,
+    include_drafts: bool,
+    include_deleted: bool,
+    status: int | None,
+    category_id: int | None,
+    author_id: int | None,
+    search: str | None,
+    created_from: datetime | None,
+    created_to: datetime | None,
+):
+    if created_from is not None and created_to is not None and created_from > created_to:
+        raise PostValidationError("created_from must be earlier than or equal to created_to")
+    if not include_deleted:
+        stmt = stmt.where(Post.is_delete == 0)
+    if published_only:
+        stmt = stmt.where(Post.status == 1)
+    elif status is not None:
+        stmt = stmt.where(Post.status == status)
+    elif not include_drafts:
+        stmt = stmt.where(Post.status != 0)
+    if category_id is not None:
+        stmt = stmt.where(Post.category_id == category_id)
+    if author_id is not None:
+        stmt = stmt.where(Post.user_id == author_id)
+    if search:
+        keyword = f"%{search.strip()}%"
+        stmt = stmt.where(
+            or_(
+                Post.title.ilike(keyword),
+                Post.slug.ilike(keyword),
+                Post.summary.ilike(keyword),
+            )
+        )
+    if created_from is not None:
+        stmt = stmt.where(Post.created_at >= created_from)
+    if created_to is not None:
+        stmt = stmt.where(Post.created_at <= created_to)
+    return stmt
 
 
 async def _get_post_or_raise(
@@ -108,23 +172,62 @@ async def list_posts(
     include_deleted: bool = False,
     status: int | None = None,
     category_id: int | None = None,
-) -> list[PostReadModel]:
-    stmt = _post_query().order_by(Post.is_top.desc(), Post.published_at.desc(), Post.created_at.desc())
-    if not include_deleted:
-        stmt = stmt.where(Post.is_delete == 0)
-    if published_only:
-        stmt = stmt.where(Post.status == 1)
-    elif status is not None:
-        stmt = stmt.where(Post.status == status)
-    elif not include_drafts:
-        stmt = stmt.where(Post.status != 0)
-    if category_id is not None:
-        stmt = stmt.where(Post.category_id == category_id)
+    author_id: int | None = None,
+    search: str | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+    sort_by: Literal["created_at", "published_at", "view_count"] = "published_at",
+    sort_order: Literal["asc", "desc"] = "desc",
+    page: int = 1,
+    page_size: int = 10,
+) -> PostListPageReadModel:
+    base_stmt = _apply_post_filters(
+        _post_query(),
+        published_only=published_only,
+        include_drafts=include_drafts,
+        include_deleted=include_deleted,
+        status=status,
+        category_id=category_id,
+        author_id=author_id,
+        search=search,
+        created_from=created_from,
+        created_to=created_to,
+    )
+    stmt = _apply_post_sorting(base_stmt, sort_by=sort_by, sort_order=sort_order).offset((page - 1) * page_size).limit(page_size)
+    total_stmt = _apply_post_filters(
+        select(func.count()).select_from(Post),
+        published_only=published_only,
+        include_drafts=include_drafts,
+        include_deleted=include_deleted,
+        status=status,
+        category_id=category_id,
+        author_id=author_id,
+        search=search,
+        created_from=created_from,
+        created_to=created_to,
+    )
     posts = await db.scalars(stmt)
-    return [to_post_read_model(post) for post in posts]
+    total = int(await db.scalar(total_stmt) or 0)
+    total_pages = ceil(total / page_size) if total > 0 else 0
+    return PostListPageReadModel(
+        data=[to_post_read_model(post) for post in posts],
+        page=page,
+        page_size=page_size,
+        total=total,
+        total_pages=total_pages,
+        has_next=page < total_pages,
+        has_prev=page > 1 and total_pages > 0,
+    )
 
 
-async def list_public_posts(db: AsyncSession, *, category_id: int | None = None) -> list[PostReadModel]:
+async def list_public_posts(
+    db: AsyncSession,
+    *,
+    category_id: int | None = None,
+    search: str | None = None,
+    page: int = 1,
+    page_size: int = 10,
+) -> PostListPageReadModel:
     return await list_posts(
         db,
         published_only=True,
@@ -132,6 +235,14 @@ async def list_public_posts(db: AsyncSession, *, category_id: int | None = None)
         include_deleted=False,
         status=None,
         category_id=category_id,
+        author_id=None,
+        search=search,
+        created_from=None,
+        created_to=None,
+        sort_by="published_at",
+        sort_order="desc",
+        page=page,
+        page_size=page_size,
     )
 
 
@@ -142,7 +253,15 @@ async def list_manage_posts(
     include_deleted: bool = False,
     status: int | None = None,
     category_id: int | None = None,
-) -> list[PostReadModel]:
+    author_id: int | None = None,
+    search: str | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+    sort_by: Literal["created_at", "published_at", "view_count"] = "published_at",
+    sort_order: Literal["asc", "desc"] = "desc",
+    page: int = 1,
+    page_size: int = 10,
+) -> PostListPageReadModel:
     return await list_posts(
         db,
         published_only=False,
@@ -150,6 +269,14 @@ async def list_manage_posts(
         include_deleted=include_deleted,
         status=status,
         category_id=category_id,
+        author_id=author_id,
+        search=search,
+        created_from=created_from,
+        created_to=created_to,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        page=page,
+        page_size=page_size,
     )
 
 

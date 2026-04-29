@@ -2,6 +2,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.admin_actions import AdminAction
 from app.core.read_models import CategoryReadModel
 from app.models.category import Category
 from app.models.post import Post
@@ -39,6 +40,28 @@ async def _ensure_parent_exists(db: AsyncSession, parent_id: int) -> None:
         raise CategoryValidationError(f"Parent category with id {parent_id} does not exist")
 
 
+async def _ensure_no_category_cycle(
+    db: AsyncSession,
+    *,
+    category_id: int,
+    parent_id: int,
+) -> None:
+    current_parent_id = parent_id
+    visited_category_ids: set[int] = set()
+
+    while current_parent_id != 0:
+        if current_parent_id == category_id:
+            raise CategoryValidationError("Category parent relationship cannot create a cycle")
+        if current_parent_id in visited_category_ids:
+            raise CategoryValidationError("Category parent relationship cannot create a cycle")
+
+        visited_category_ids.add(current_parent_id)
+        parent = await db.get(Category, current_parent_id)
+        if parent is None:
+            raise CategoryValidationError(f"Parent category with id {current_parent_id} does not exist")
+        current_parent_id = int(parent.parent_id)
+
+
 async def create_category(
     db: AsyncSession,
     payload: CategoryCreate,
@@ -63,7 +86,7 @@ async def create_category(
     await record_admin_action(
         db,
         actor=actor,
-        action="create_category",
+        action=AdminAction.CREATE_CATEGORY,
         detail=f"Created category {category_read_model.id} ({category_read_model.slug})",
         audit_context=audit_context,
     )
@@ -89,6 +112,7 @@ async def update_category(
         if parent_id == category_id:
             raise CategoryValidationError("Category cannot be its own parent")
         await _ensure_parent_exists(db, parent_id)
+        await _ensure_no_category_cycle(db, category_id=category_id, parent_id=parent_id)
 
     for field_name, value in update_data.items():
         setattr(category, field_name, value)
@@ -104,7 +128,7 @@ async def update_category(
     await record_admin_action(
         db,
         actor=actor,
-        action="update_category",
+        action=AdminAction.UPDATE_CATEGORY,
         detail=f"Updated category {category_read_model.id} ({category_read_model.slug})",
         audit_context=audit_context,
     )
@@ -138,7 +162,7 @@ async def delete_category(
     await record_admin_action(
         db,
         actor=actor,
-        action="delete_category",
+        action=AdminAction.DELETE_CATEGORY,
         detail=f"Deleted category {category_id} ({category.slug})",
         audit_context=audit_context,
     )

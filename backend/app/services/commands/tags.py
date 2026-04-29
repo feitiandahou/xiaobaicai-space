@@ -2,6 +2,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.admin_actions import AdminAction
 from app.core.read_models import TagReadModel
 from app.models.post import post_tags
 from app.models.tag import Tag
@@ -58,7 +59,7 @@ async def create_tag(
     await record_admin_action(
         db,
         actor=actor,
-        action="create_tag",
+        action=AdminAction.CREATE_TAG,
         detail=f"Created tag {tag_read_model.id} ({tag_read_model.slug})",
         audit_context=audit_context,
     )
@@ -96,7 +97,7 @@ async def update_tag(
     await record_admin_action(
         db,
         actor=actor,
-        action="update_tag",
+        action=AdminAction.UPDATE_TAG,
         detail=f"Updated tag {tag_read_model.id} ({tag_read_model.slug})",
         audit_context=audit_context,
     )
@@ -125,7 +126,7 @@ async def delete_tag(
     await record_admin_action(
         db,
         actor=actor,
-        action="delete_tag",
+        action=AdminAction.DELETE_TAG,
         detail=f"Deleted tag {tag_id} ({tag.slug})",
         audit_context=audit_context,
     )
