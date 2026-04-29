@@ -1,12 +1,12 @@
 from collections.abc import Mapping
 
 from app.core.read_models import UserReadModel
-from app.schemas.user import UserListResponse, UserOut
+from app.models.user import User
 
 
-def present_user_out(user: UserReadModel) -> UserOut:
+def to_user_read_model(user: User) -> UserReadModel:
     social_links = user.social_links if isinstance(user.social_links, Mapping) else {}
-    return UserOut(
+    return UserReadModel(
         id=int(user.id),
         username=user.username,
         email=user.email,
@@ -18,7 +18,3 @@ def present_user_out(user: UserReadModel) -> UserOut:
         created_at=user.created_at,
         updated_at=user.updated_at,
     )
-
-
-def present_user_list_response(users: list[UserReadModel]) -> UserListResponse:
-    return UserListResponse(data=[present_user_out(user) for user in users])

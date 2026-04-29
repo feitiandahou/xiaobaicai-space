@@ -17,16 +17,19 @@ from app.core.database import get_db
 from app.core.security import get_current_admin, get_current_user
 from app.models.user import User
 from app.schemas.post import PostCreate, PostUpdate
-from app.services.post_service import (
+from app.services.commands.audit import AuditContext
+from app.services.commands.posts import (
+    create_post,
+    delete_post,
+    update_post,
+)
+from app.services.queries.posts import (
     PostConflictError,
     PostNotFoundError,
     PostPermissionError,
-    create_post,
-    delete_post,
     get_public_post,
     list_manage_posts,
     list_public_posts,
-    update_post,
 )
 
 
@@ -52,6 +55,7 @@ def _post_payload(post_id: int = 1) -> SimpleNamespace:
         like_count=0,
         created_at="2024-01-01T00:00:00",
         updated_at="2024-01-01T00:00:00",
+        tag_ids=[],
         tags=[],
     )
 
@@ -149,7 +153,7 @@ def test_posts_openapi_declares_unified_error_models(post_app: FastAPI) -> None:
 def test_list_public_posts_applies_published_only_filter(monkeypatch: pytest.MonkeyPatch) -> None:
     list_posts_mock = AsyncMock(return_value=[])
     db = cast(AsyncSession, SimpleNamespace())
-    monkeypatch.setattr("app.services.post_service.list_posts", list_posts_mock)
+    monkeypatch.setattr("app.services.queries.posts.list_posts", list_posts_mock)
 
     result = asyncio.run(list_public_posts(db, category_id=7))
 
@@ -167,7 +171,7 @@ def test_list_public_posts_applies_published_only_filter(monkeypatch: pytest.Mon
 def test_list_manage_posts_passes_management_filters(monkeypatch: pytest.MonkeyPatch) -> None:
     list_posts_mock = AsyncMock(return_value=[])
     db = cast(AsyncSession, SimpleNamespace())
-    monkeypatch.setattr("app.services.post_service.list_posts", list_posts_mock)
+    monkeypatch.setattr("app.services.queries.posts.list_posts", list_posts_mock)
 
     result = asyncio.run(
         list_manage_posts(
@@ -266,7 +270,7 @@ def test_update_post_rejects_non_owner(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_get_post_or_raise(*args, **kwargs):
         return SimpleNamespace(user_id=2, tags=[])
 
-    monkeypatch.setattr("app.services.post_service._get_post_or_raise", fake_get_post_or_raise)
+    monkeypatch.setattr("app.services.commands.posts._get_post_or_raise", fake_get_post_or_raise)
 
     with pytest.raises(PostPermissionError):
         asyncio.run(update_post(db, 10, PostUpdate(title="changed"), actor=actor))
@@ -286,10 +290,10 @@ def test_create_post_rolls_back_and_translates_integrity_error(monkeypatch: pyte
     async def fake_load_tags(*args, **kwargs):
         return []
 
-    monkeypatch.setattr("app.services.post_service._ensure_user_exists", noop)
-    monkeypatch.setattr("app.services.post_service._ensure_category_exists", noop)
-    monkeypatch.setattr("app.services.post_service._ensure_slug_available", noop)
-    monkeypatch.setattr("app.services.post_service._load_tags", fake_load_tags)
+    monkeypatch.setattr("app.services.commands.posts._ensure_user_exists", noop)
+    monkeypatch.setattr("app.services.commands.posts._ensure_category_exists", noop)
+    monkeypatch.setattr("app.services.commands.posts._ensure_slug_available", noop)
+    monkeypatch.setattr("app.services.commands.posts._load_tags", fake_load_tags)
 
     payload = PostCreate(title="title", content="body", user_id=1, tag_ids=[])
 
@@ -297,6 +301,51 @@ def test_create_post_rolls_back_and_translates_integrity_error(monkeypatch: pyte
         asyncio.run(create_post(db, payload, actor=actor))
 
     rollback_mock.assert_awaited_once()
+
+
+def test_create_post_records_admin_audit(monkeypatch: pytest.MonkeyPatch) -> None:
+    actor = cast(User, SimpleNamespace(id=1, role="admin", username="admin"))
+    audit_mock = AsyncMock()
+    created_post = _post_payload(22)
+
+    class FakeDb:
+        def add(self, post):
+            post.id = 22
+            post.tags = []
+
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+    async def noop(*args, **kwargs):
+        return None
+
+    async def fake_load_tags(*args, **kwargs):
+        return []
+
+    async def fake_get_post_or_raise(*args, **kwargs):
+        return created_post
+
+    monkeypatch.setattr("app.services.commands.posts._ensure_user_exists", noop)
+    monkeypatch.setattr("app.services.commands.posts._ensure_category_exists", noop)
+    monkeypatch.setattr("app.services.commands.posts._ensure_slug_available", noop)
+    monkeypatch.setattr("app.services.commands.posts._load_tags", fake_load_tags)
+    monkeypatch.setattr("app.services.commands.posts._get_post_or_raise", fake_get_post_or_raise)
+    monkeypatch.setattr("app.services.commands.posts.record_admin_action", audit_mock)
+
+    result = asyncio.run(
+        create_post(
+            cast(AsyncSession, FakeDb()),
+            PostCreate(title="title", content="body", user_id=1, tag_ids=[]),
+            actor=actor,
+            audit_context=AuditContext(ip_address="127.0.0.1"),
+        )
+    )
+
+    assert result.id == 22
+    audit_mock.assert_awaited_once()
 
 
 def test_update_post_rolls_back_and_translates_integrity_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -307,7 +356,7 @@ def test_update_post_rolls_back_and_translates_integrity_error(monkeypatch: pyte
     async def fake_get_post_or_raise(*args, **kwargs):
         return SimpleNamespace(id=10, user_id=1, tags=[], title="old")
 
-    monkeypatch.setattr("app.services.post_service._get_post_or_raise", fake_get_post_or_raise)
+    monkeypatch.setattr("app.services.commands.posts._get_post_or_raise", fake_get_post_or_raise)
 
     with pytest.raises(PostConflictError, match="Post update conflicts with existing data"):
         asyncio.run(update_post(db, 10, PostUpdate(title="changed"), actor=actor))
@@ -324,7 +373,7 @@ def test_delete_post_rolls_back_and_translates_integrity_error(monkeypatch: pyte
     async def fake_get_post_or_raise(*args, **kwargs):
         return post
 
-    monkeypatch.setattr("app.services.post_service._get_post_or_raise", fake_get_post_or_raise)
+    monkeypatch.setattr("app.services.commands.posts._get_post_or_raise", fake_get_post_or_raise)
 
     with pytest.raises(PostConflictError, match="Post deletion failed"):
         asyncio.run(delete_post(db, 10, actor=actor))

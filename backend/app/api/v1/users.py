@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.audit import build_audit_context
 from app.api.responses import build_error_responses
 from app.core.config import settings
 from app.core.database import get_db
@@ -17,14 +18,16 @@ from app.schemas.user import (
     UserStatusUpdate,
     UserUpdate,
 )
-from app.services.user_service import (
-    authenticate_user as authenticate_user_service,
+from app.services.commands.users import (
     change_password as change_password_service,
     create_user as create_user_service,
-    get_user as get_user_service,
-    list_users as list_users_service,
     update_user_status as update_user_status_service,
     update_user as update_user_service,
+)
+from app.services.queries.users import (
+    authenticate_user as authenticate_user_service,
+    get_user as get_user_service,
+    list_users as list_users_service,
 )
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -80,28 +83,31 @@ async def get_user(
 async def update_user(
     user_id: int,
     payload: UserUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> UserResponse:
-    user = await update_user_service(db, user_id, payload, actor=current_user)
+    user = await update_user_service(db, user_id, payload, actor=current_user, audit_context=build_audit_context(request))
     return UserResponse(data=present_user_out(user))
 
 
 @router.post("/me/change-password", status_code=status.HTTP_204_NO_CONTENT, responses=build_error_responses(401, 403, 404, 409, 422))
 async def change_password(
     payload: ChangePasswordRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> None:
-    await change_password_service(db, int(current_user.id), payload, actor=current_user)
+    await change_password_service(db, int(current_user.id), payload, actor=current_user, audit_context=build_audit_context(request))
 
 
 @admin_router.patch("/{user_id}/status", response_model=UserResponse, responses=build_error_responses(401, 403, 404, 409, 422))
 async def update_user_status(
     user_id: int,
     payload: UserStatusUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_admin),
 ) -> UserResponse:
-    user = await update_user_status_service(db, user_id, payload, actor=current_user)
+    user = await update_user_status_service(db, user_id, payload, actor=current_user, audit_context=build_audit_context(request))
     return UserResponse(data=present_user_out(user))

@@ -18,16 +18,19 @@ from app.core.security import create_access_token, get_current_admin, get_curren
 from app.core.errors import AuthenticationRequiredError, PermissionDeniedError
 from app.models.user import User
 from app.schemas.user import ChangePasswordRequest, UserCreate, UserStatusUpdate, UserUpdate
-from app.services.user_service import (
+from app.services.commands.audit import AuditContext
+from app.services.commands.users import (
+    change_password,
+    create_user,
+    update_user,
+    update_user_status,
+)
+from app.services.queries.users import (
     UserAuthenticationError,
     UserConflictError,
     UserInactiveError,
     UserPermissionError,
     authenticate_user,
-    change_password,
-    create_user,
-    update_user,
-    update_user_status,
 )
 
 
@@ -225,7 +228,7 @@ def test_create_user_hashes_password(monkeypatch: pytest.MonkeyPatch) -> None:
         async def get(self, model, user_id):
             return added_users[0]
 
-    monkeypatch.setattr("app.services.user_service.get_password_hash", lambda raw: f"hashed-{raw}")
+    monkeypatch.setattr("app.services.commands.users.get_password_hash", lambda raw: f"hashed-{raw}")
 
     result = asyncio.run(
         create_user(
@@ -242,10 +245,10 @@ def test_create_user_hashes_password(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     assert added_users[0].password == "hashed-secret123"
-    assert result is added_users[0]
     assert added_users[0].role == "user"
     assert result.role == "user"
-    assert result.is_active == 1
+    assert result.username == "alice"
+    assert result.is_active is True
 
 
 def test_update_user_rejects_non_admin_role_change() -> None:
@@ -300,7 +303,7 @@ def test_authenticate_user_rejects_disabled_account(monkeypatch: pytest.MonkeyPa
         async def scalar(self, stmt):
             return disabled_user
 
-    monkeypatch.setattr("app.services.user_service.verify_password", lambda plain, hashed: True)
+    monkeypatch.setattr("app.services.queries.users.verify_password", lambda plain, hashed: True)
 
     with pytest.raises(UserInactiveError):
         asyncio.run(authenticate_user(cast(AsyncSession, FakeDB()), "disabled", "secret123"))
@@ -332,8 +335,8 @@ def test_change_password_requires_current_password(monkeypatch: pytest.MonkeyPat
         async def rollback(self):
             return None
 
-    monkeypatch.setattr("app.services.user_service.verify_password", lambda plain, hashed: plain == "current123")
-    monkeypatch.setattr("app.services.user_service.get_password_hash", lambda raw: f"hashed-{raw}")
+    monkeypatch.setattr("app.services.commands.users.verify_password", lambda plain, hashed: plain == "current123")
+    monkeypatch.setattr("app.services.commands.users.get_password_hash", lambda raw: f"hashed-{raw}")
 
     asyncio.run(
         change_password(
@@ -392,7 +395,52 @@ def test_admin_can_disable_user() -> None:
     )
 
     assert managed_user.is_active == 0
-    assert result is managed_user
+    assert result.id == 2
+    assert result.username == "bob"
+    assert result.is_active is False
+
+
+def test_update_user_status_records_admin_audit(monkeypatch: pytest.MonkeyPatch) -> None:
+    actor = cast(User, SimpleNamespace(id=1, role="admin", is_active=1, username="admin"))
+    managed_user = SimpleNamespace(
+        id=2,
+        username="bob",
+        password="hashed",
+        email="bob@example.com",
+        avatar=None,
+        bio=None,
+        role="user",
+        is_active=1,
+        social_links={},
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+    )
+    audit_mock = AsyncMock()
+
+    class FakeDB:
+        async def get(self, model, user_id):
+            return managed_user
+
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+    monkeypatch.setattr("app.services.commands.users.record_admin_action", audit_mock)
+
+    result = asyncio.run(
+        update_user_status(
+            cast(AsyncSession, FakeDB()),
+            2,
+            UserStatusUpdate(is_active=False),
+            actor=actor,
+            audit_context=AuditContext(ip_address="127.0.0.1"),
+        )
+    )
+
+    assert result.id == 2
+    audit_mock.assert_awaited_once()
     assert result.is_active == 0
 
 

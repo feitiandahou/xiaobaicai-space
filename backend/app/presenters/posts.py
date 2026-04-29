@@ -1,10 +1,8 @@
-from app.models.post import Post
+from app.core.read_models import PostReadModel
 from app.schemas.post import PostListItem, PostListResponse, PostOut
 
 
-def present_post_out(post: Post) -> PostOut:
-    tag_ids = [int(tag.id) for tag in post.tags]
-    tags = [tag.name for tag in post.tags]
+def present_post_out(post: PostReadModel) -> PostOut:
     return PostOut(
         id=int(post.id),
         user_id=int(post.user_id),
@@ -22,14 +20,12 @@ def present_post_out(post: Post) -> PostOut:
         like_count=int(post.like_count),
         created_at=post.created_at,
         updated_at=post.updated_at,
-        tag_ids=tag_ids,
-        tags=tags,
+        tag_ids=list(post.tag_ids),
+        tags=list(post.tags),
     )
 
 
-def present_post_list_item(post: Post) -> PostListItem:
-    tag_ids = [int(tag.id) for tag in post.tags]
-    tags = [tag.name for tag in post.tags]
+def present_post_list_item(post: PostReadModel) -> PostListItem:
     return PostListItem(
         id=int(post.id),
         title=post.title,
@@ -42,10 +38,10 @@ def present_post_list_item(post: Post) -> PostListItem:
         like_count=int(post.like_count),
         published_at=post.published_at,
         created_at=post.created_at,
-        tag_ids=tag_ids,
-        tags=tags,
+        tag_ids=list(post.tag_ids),
+        tags=list(post.tags),
     )
 
 
-def present_post_list_response(posts: list[Post]) -> PostListResponse:
+def present_post_list_response(posts: list[PostReadModel]) -> PostListResponse:
     return PostListResponse(data=[present_post_list_item(post) for post in posts])
