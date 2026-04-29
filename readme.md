@@ -30,7 +30,7 @@ sqlalchemy
 
 mysql
 
-### quick start
+## quick start
 
 cd front
 
@@ -45,24 +45,19 @@ cd backend
 Rename ".env.example" File to ".env" 
 and fill in your database information 
 
-
 uv sync
 
-# init database
+#### init database
 (in mysql)
-CREATE DATABASE xiaobaicai CHARACTER SET utf8mb4 
+CREATE DATABASE xiaobaicai CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 cd backend
-
-COLLATE utf8mb4_unicode_ci;
 
 uv run alembic upgrade head
 
 uv run uvicorn app.main:app --reload
 
-+++
-
-stop-process(windows):
+#### stop-process(windows):
 In CMD: Ctrl + C
 Or
 Stop-Process -Name uv,uvicorn,python -Force

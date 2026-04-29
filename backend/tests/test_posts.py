@@ -10,8 +10,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1 import posts as posts_api
+from app.api.v1.admin import router as admin_api_router
+from app.core.exception_handlers import register_exception_handlers
+from app.core.error_codes import ErrorCode
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_admin, get_current_user
 from app.models.user import User
 from app.schemas.post import PostCreate, PostUpdate
 from app.services.post_service import (
@@ -21,12 +24,36 @@ from app.services.post_service import (
     create_post,
     delete_post,
     get_public_post,
+    list_manage_posts,
+    list_public_posts,
     update_post,
 )
 
 
 async def _override_db():
     yield object()
+
+
+def _post_payload(post_id: int = 1) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=post_id,
+        user_id=1,
+        title="hello",
+        slug="hello-world",
+        summary=None,
+        content="body",
+        cover_image=None,
+        category_id=None,
+        status=1,
+        is_top=0,
+        published_at=None,
+        is_delete=0,
+        view_count=0,
+        like_count=0,
+        created_at="2024-01-01T00:00:00",
+        updated_at="2024-01-01T00:00:00",
+        tags=[],
+    )
 
 
 def _integrity_error() -> IntegrityError:
@@ -36,19 +63,55 @@ def _integrity_error() -> IntegrityError:
 @pytest.fixture
 def post_app() -> FastAPI:
     app = FastAPI()
+    register_exception_handlers(app)
     app.include_router(posts_api.router, prefix="/api/v1")
+    app.include_router(admin_api_router, prefix="/api/v1")
     app.dependency_overrides[get_db] = _override_db
     return app
 
 
-def test_list_posts_passes_include_flags(post_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_public_list_posts_enforces_published_only(post_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
     list_posts_mock = AsyncMock(return_value=[])
-    monkeypatch.setattr(posts_api, "list_posts_service", list_posts_mock)
+    monkeypatch.setattr(posts_api, "list_public_posts_service", list_posts_mock)
 
     with TestClient(post_app) as client:
         response = client.get(
             "/api/v1/posts",
-            params={"include_drafts": "true", "include_deleted": "true"},
+            params={"include_drafts": "true", "include_deleted": "true", "status": "0", "category_id": "3"},
+        )
+
+    assert response.status_code == 200
+    list_posts_mock.assert_awaited_once()
+    assert list_posts_mock.await_args is not None
+    _, kwargs = list_posts_mock.await_args
+    assert kwargs == {"category_id": 3}
+
+
+def test_post_list_validation_uses_unified_error_shape(post_app: FastAPI) -> None:
+    with TestClient(post_app) as client:
+        response = client.get("/api/v1/posts", params={"category_id": "0"})
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+    assert response.json()["detail"] == "Validation failed"
+    assert response.json()["errors"][0]["loc"] == ["query", "category_id"]
+    assert response.json()["errors"][0]["type"]
+
+
+def test_manage_list_posts_passes_include_flags(post_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    list_posts_mock = AsyncMock(return_value=[])
+    app_admin = cast(User, SimpleNamespace(id=1, role="admin", is_active=True))
+
+    async def override_current_admin() -> User:
+        return app_admin
+
+    post_app.dependency_overrides[get_current_admin] = override_current_admin
+    monkeypatch.setattr(posts_api, "list_manage_posts_service", list_posts_mock)
+
+    with TestClient(post_app) as client:
+        response = client.get(
+            "/api/v1/admin/posts",
+            params={"include_drafts": "true", "include_deleted": "true", "status": "0", "category_id": "3"},
         )
 
     assert response.status_code == 200
@@ -57,31 +120,78 @@ def test_list_posts_passes_include_flags(post_app: FastAPI, monkeypatch: pytest.
     _, kwargs = list_posts_mock.await_args
     assert kwargs["include_drafts"] is True
     assert kwargs["include_deleted"] is True
+    assert kwargs["status"] == 0
+    assert kwargs["category_id"] == 3
+
+
+def test_manage_list_posts_requires_admin(post_app: FastAPI) -> None:
+    with TestClient(post_app) as client:
+        response = client.get("/api/v1/admin/posts")
+
+    assert response.status_code == 401
+    assert response.json() == {"code": ErrorCode.AUTHENTICATION_REQUIRED.value, "detail": "Authentication required"}
+    assert response.headers["www-authenticate"] == "Bearer"
+
+
+def test_posts_openapi_declares_unified_error_models(post_app: FastAPI) -> None:
+    schema = post_app.openapi()
+    get_post_operation = schema["paths"]["/api/v1/posts/{post_id}"]["get"]
+
+    assert get_post_operation["responses"]["404"]["content"]["application/json"]["schema"]["$ref"] == "#/components/schemas/ErrorResponse"
+    assert get_post_operation["responses"]["422"]["content"]["application/json"]["schema"]["$ref"] == "#/components/schemas/ValidationErrorResponse"
+    assert get_post_operation["responses"]["404"]["description"] == "Resource not found"
+    assert get_post_operation["responses"]["404"]["content"]["application/json"]["example"] == {
+        "code": ErrorCode.NOT_FOUND.value,
+        "detail": "Resource not found",
+    }
+
+
+def test_list_public_posts_applies_published_only_filter(monkeypatch: pytest.MonkeyPatch) -> None:
+    list_posts_mock = AsyncMock(return_value=[])
+    db = cast(AsyncSession, SimpleNamespace())
+    monkeypatch.setattr("app.services.post_service.list_posts", list_posts_mock)
+
+    result = asyncio.run(list_public_posts(db, category_id=7))
+
+    assert result == []
+    list_posts_mock.assert_awaited_once_with(
+        db,
+        published_only=True,
+        include_drafts=False,
+        include_deleted=False,
+        status=None,
+        category_id=7,
+    )
+
+
+def test_list_manage_posts_passes_management_filters(monkeypatch: pytest.MonkeyPatch) -> None:
+    list_posts_mock = AsyncMock(return_value=[])
+    db = cast(AsyncSession, SimpleNamespace())
+    monkeypatch.setattr("app.services.post_service.list_posts", list_posts_mock)
+
+    result = asyncio.run(
+        list_manage_posts(
+            db,
+            include_drafts=True,
+            include_deleted=True,
+            status=2,
+            category_id=5,
+        )
+    )
+
+    assert result == []
+    list_posts_mock.assert_awaited_once_with(
+        db,
+        published_only=False,
+        include_drafts=True,
+        include_deleted=True,
+        status=2,
+        category_id=5,
+    )
 
 
 def test_slug_route_is_namespaced(post_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
-    get_by_slug_mock = AsyncMock(
-        return_value={
-            "id": 1,
-            "user_id": 1,
-            "title": "hello",
-            "slug": "hello-world",
-            "summary": None,
-            "content": "body",
-            "cover_image": None,
-            "category_id": None,
-            "status": 1,
-            "is_top": 0,
-            "published_at": None,
-            "is_delete": 0,
-            "view_count": 0,
-            "like_count": 0,
-            "created_at": "2024-01-01T00:00:00",
-            "updated_at": "2024-01-01T00:00:00",
-            "tag_ids": [],
-            "tags": [],
-        }
-    )
+    get_by_slug_mock = AsyncMock(return_value=_post_payload())
     get_by_id_mock = AsyncMock()
     monkeypatch.setattr(posts_api, "get_public_post_by_slug_service", get_by_slug_mock)
     monkeypatch.setattr(posts_api, "get_public_post_service", get_by_id_mock)
@@ -95,28 +205,7 @@ def test_slug_route_is_namespaced(post_app: FastAPI, monkeypatch: pytest.MonkeyP
 
 
 def test_public_post_route_uses_public_read_service(post_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
-    get_public_post_mock = AsyncMock(
-        return_value={
-            "id": 1,
-            "user_id": 1,
-            "title": "hello",
-            "slug": "hello-world",
-            "summary": None,
-            "content": "body",
-            "cover_image": None,
-            "category_id": None,
-            "status": 1,
-            "is_top": 0,
-            "published_at": None,
-            "is_delete": 0,
-            "view_count": 0,
-            "like_count": 0,
-            "created_at": "2024-01-01T00:00:00",
-            "updated_at": "2024-01-01T00:00:00",
-            "tag_ids": [],
-            "tags": [],
-        }
-    )
+    get_public_post_mock = AsyncMock(return_value=_post_payload())
     monkeypatch.setattr(posts_api, "get_public_post_service", get_public_post_mock)
 
     with TestClient(post_app) as client:
@@ -159,7 +248,7 @@ def test_post_route_uses_global_exception_handler(post_app: FastAPI, monkeypatch
         response = client.get("/api/v1/posts/1")
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "missing post"}
+    assert response.json() == {"code": ErrorCode.POST_NOT_FOUND.value, "detail": "missing post"}
 
 
 def test_create_post_rejects_other_author() -> None:

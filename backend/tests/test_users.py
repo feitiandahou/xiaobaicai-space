@@ -5,15 +5,19 @@ from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1 import users as users_api
+from app.api.v1.admin import router as admin_api_router
 from app.core.database import get_db
+from app.core.error_codes import ErrorCode
+from app.core.exception_handlers import register_exception_handlers
 from app.core.security import create_access_token, get_current_admin, get_current_user
+from app.core.errors import AuthenticationRequiredError, PermissionDeniedError
 from app.models.user import User
-from app.schemas.user import ChangePasswordRequest, UserCreate, UserOut, UserStatusUpdate, UserUpdate
+from app.schemas.user import ChangePasswordRequest, UserCreate, UserStatusUpdate, UserUpdate
 from app.services.user_service import (
     UserAuthenticationError,
     UserConflictError,
@@ -34,7 +38,9 @@ async def _override_db():
 @pytest.fixture
 def user_app() -> FastAPI:
     app = FastAPI()
+    register_exception_handlers(app)
     app.include_router(users_api.router, prefix="/api/v1")
+    app.include_router(admin_api_router, prefix="/api/v1")
     app.dependency_overrides[get_db] = _override_db
     return app
 
@@ -57,20 +63,33 @@ def _user_payload(user_id: int = 1, *, role: str = "user", is_active: bool = Tru
 
 def test_list_users_requires_admin(user_app: FastAPI) -> None:
     async def deny_admin():
-        from fastapi import HTTPException, status
+        from fastapi import status
 
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
 
     user_app.dependency_overrides[get_current_admin] = deny_admin
 
     with TestClient(user_app) as client:
-        response = client.get("/api/v1/users")
+        response = client.get("/api/v1/admin/users")
 
     assert response.status_code == 403
 
 
+def test_users_openapi_declares_unified_error_models(user_app: FastAPI) -> None:
+    schema = user_app.openapi()
+    login_operation = schema["paths"]["/api/v1/users/login"]["post"]
+
+    assert login_operation["responses"]["401"]["content"]["application/json"]["schema"]["$ref"] == "#/components/schemas/ErrorResponse"
+    assert login_operation["responses"]["422"]["content"]["application/json"]["schema"]["$ref"] == "#/components/schemas/ValidationErrorResponse"
+    assert login_operation["responses"]["401"]["description"] == "Authentication failed or missing credentials"
+    assert login_operation["responses"]["401"]["content"]["application/json"]["example"] == {
+        "code": ErrorCode.AUTHENTICATION_REQUIRED.value,
+        "detail": "Authentication required",
+    }
+
+
 def test_login_returns_bearer_token(user_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
-    auth_mock = AsyncMock(return_value=UserOut.model_validate(_user_payload(7)))
+    auth_mock = AsyncMock(return_value=SimpleNamespace(**_user_payload(7), password="hashed-secret"))
     monkeypatch.setattr(users_api, "authenticate_user_service", auth_mock)
 
     with TestClient(user_app) as client:
@@ -83,6 +102,27 @@ def test_login_returns_bearer_token(user_app: FastAPI, monkeypatch: pytest.Monke
     assert response.json()["token_type"] == "bearer"
     assert response.json()["access_token"]
     assert response.json()["user"]["id"] == 7
+
+
+def test_create_user_validation_uses_unified_error_shape(user_app: FastAPI) -> None:
+    with TestClient(user_app) as client:
+        response = client.post(
+            "/api/v1/users",
+            json={
+                "username": "ab",
+                "password": "123",
+                "email": "not-an-email",
+                "avatar": None,
+                "bio": None,
+                "social_links": {},
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+    assert response.json()["detail"] == "Validation failed"
+    assert len(response.json()["errors"]) >= 1
+    assert all("loc" in error and "msg" in error and "type" in error for error in response.json()["errors"])
 
 
 def test_user_route_uses_global_exception_handler(user_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -109,12 +149,12 @@ def test_user_route_uses_global_exception_handler(user_app: FastAPI, monkeypatch
         )
 
     assert response.status_code == 409
-    assert response.json() == {"detail": "duplicate user"}
+    assert response.json() == {"code": ErrorCode.USER_CONFLICT.value, "detail": "duplicate user"}
 
 
 def test_get_me_returns_current_user(user_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
     user_app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=7, role="user", is_active=1)
-    get_user_mock = AsyncMock(return_value=_user_payload(7))
+    get_user_mock = AsyncMock(return_value=SimpleNamespace(**_user_payload(7), password="hashed-secret"))
     monkeypatch.setattr(users_api, "get_user_service", get_user_mock)
 
     with TestClient(user_app) as client:
@@ -122,6 +162,32 @@ def test_get_me_returns_current_user(user_app: FastAPI, monkeypatch: pytest.Monk
 
     assert response.status_code == 200
     assert response.json()["data"]["id"] == 7
+
+
+def test_get_me_requires_authentication(user_app: FastAPI) -> None:
+    with TestClient(user_app) as client:
+        response = client.get("/api/v1/users/me")
+
+    assert response.status_code == 401
+    assert response.json() == {"code": ErrorCode.AUTHENTICATION_REQUIRED.value, "detail": "Authentication required"}
+    assert response.headers["www-authenticate"] == "Bearer"
+
+
+def test_authentication_error_exposes_bearer_header() -> None:
+    exc = AuthenticationRequiredError("Invalid or expired token")
+
+    assert exc.status_code == 401
+    assert exc.code == ErrorCode.AUTHENTICATION_REQUIRED.value
+    assert exc.detail == "Invalid or expired token"
+    assert exc.headers == {"WWW-Authenticate": "Bearer"}
+
+
+def test_permission_error_uses_forbidden_status() -> None:
+    exc = PermissionDeniedError("Admin access required")
+
+    assert exc.status_code == 403
+    assert exc.code == ErrorCode.PERMISSION_DENIED.value
+    assert exc.detail == "Admin access required"
 
 
 def test_create_user_hashes_password(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -176,9 +242,10 @@ def test_create_user_hashes_password(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     assert added_users[0].password == "hashed-secret123"
+    assert result is added_users[0]
     assert added_users[0].role == "user"
     assert result.role == "user"
-    assert result.is_active is True
+    assert result.is_active == 1
 
 
 def test_update_user_rejects_non_admin_role_change() -> None:
@@ -325,7 +392,8 @@ def test_admin_can_disable_user() -> None:
     )
 
     assert managed_user.is_active == 0
-    assert result.is_active is False
+    assert result is managed_user
+    assert result.is_active == 0
 
 
 def test_create_access_token_supports_bearer_auth() -> None:

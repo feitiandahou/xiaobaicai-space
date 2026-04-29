@@ -1,11 +1,16 @@
-from collections.abc import Mapping
-
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.error_codes import ErrorCode
+from app.core.errors import (
+    AuthenticationRequiredError,
+    ConflictError,
+    NotFoundError,
+    PermissionDeniedError,
+)
 from app.models.user import User
-from app.schemas.user import ChangePasswordRequest, UserCreate, UserOut, UserStatusUpdate, UserUpdate
+from app.schemas.user import ChangePasswordRequest, UserCreate, UserStatusUpdate, UserUpdate
 from app.utils.security import get_password_hash, verify_password
 
 
@@ -13,44 +18,33 @@ class UserServiceError(Exception):
     pass
 
 
-class UserNotFoundError(UserServiceError):
+class UserNotFoundError(NotFoundError, UserServiceError):
+    code = ErrorCode.USER_NOT_FOUND.value
     pass
 
 
-class UserConflictError(UserServiceError):
+class UserConflictError(ConflictError, UserServiceError):
+    code = ErrorCode.USER_CONFLICT.value
     pass
 
 
-class UserPermissionError(UserServiceError):
+class UserPermissionError(PermissionDeniedError, UserServiceError):
+    code = ErrorCode.USER_PERMISSION_DENIED.value
     pass
 
 
-class UserAuthenticationError(UserServiceError):
+class UserAuthenticationError(AuthenticationRequiredError, UserServiceError):
+    code = ErrorCode.USER_AUTHENTICATION_FAILED.value
     pass
 
 
-class UserInactiveError(UserServiceError):
+class UserInactiveError(PermissionDeniedError, UserServiceError):
+    code = ErrorCode.USER_INACTIVE.value
     pass
 
 
 def _is_admin(actor: User) -> bool:
     return actor.role == "admin"
-
-
-def _serialize_user(user: User) -> UserOut:
-    social_links = user.social_links if isinstance(user.social_links, Mapping) else {}
-    return UserOut(
-        id=int(user.id),
-        username=user.username,
-        email=user.email,
-        avatar=user.avatar,
-        bio=user.bio,
-        role=user.role,
-        is_active=bool(user.is_active),
-        social_links=dict(social_links),
-        created_at=user.created_at,
-        updated_at=user.updated_at,
-    )
 
 
 async def _get_user_or_raise(db: AsyncSession, user_id: int) -> User:
@@ -123,19 +117,19 @@ async def _get_user_by_account_or_raise(db: AsyncSession, account: str) -> User:
     return user
 
 
-async def list_users(db: AsyncSession) -> list[UserOut]:
+async def list_users(db: AsyncSession) -> list[User]:
     stmt = select(User).order_by(User.created_at.desc(), User.id.desc())
     users = await db.scalars(stmt)
-    return [_serialize_user(user) for user in users]
+    return list(users)
 
 
-async def get_user(db: AsyncSession, user_id: int, *, actor: User) -> UserOut:
+async def get_user(db: AsyncSession, user_id: int, *, actor: User) -> User:
     _ensure_can_access_user(actor, user_id)
     user = await _get_user_or_raise(db, user_id)
-    return _serialize_user(user)
+    return user
 
 
-async def create_user(db: AsyncSession, payload: UserCreate) -> UserOut:
+async def create_user(db: AsyncSession, payload: UserCreate) -> User:
     await _ensure_username_available(db, payload.username)
     await _ensure_email_available(db, payload.email)
 
@@ -157,10 +151,10 @@ async def create_user(db: AsyncSession, payload: UserCreate) -> UserOut:
         raise UserConflictError("User already exists") from exc
 
     created_user = await _get_user_or_raise(db, int(user.id))
-    return _serialize_user(created_user)
+    return created_user
 
 
-async def update_user(db: AsyncSession, user_id: int, payload: UserUpdate, *, actor: User) -> UserOut:
+async def update_user(db: AsyncSession, user_id: int, payload: UserUpdate, *, actor: User) -> User:
     _ensure_can_access_user(actor, user_id)
     user = await _get_user_or_raise(db, user_id)
 
@@ -185,15 +179,15 @@ async def update_user(db: AsyncSession, user_id: int, payload: UserUpdate, *, ac
         raise UserConflictError("User update conflicts with existing data") from exc
 
     updated_user = await _get_user_or_raise(db, user_id)
-    return _serialize_user(updated_user)
+    return updated_user
 
 
-async def authenticate_user(db: AsyncSession, account: str, password: str) -> UserOut:
+async def authenticate_user(db: AsyncSession, account: str, password: str) -> User:
     user = await _get_user_by_account_or_raise(db, account)
     _ensure_user_is_active(user)
     if not verify_password(password, user.password):
         raise UserAuthenticationError("Invalid credentials")
-    return _serialize_user(user)
+    return user
 
 
 async def change_password(
@@ -226,7 +220,7 @@ async def update_user_status(
     payload: UserStatusUpdate,
     *,
     actor: User,
-) -> UserOut:
+) -> User:
     _ensure_can_manage_status(actor, user_id)
     user = await _get_user_or_raise(db, user_id)
     user.is_active = 1 if payload.is_active else 0
@@ -238,4 +232,4 @@ async def update_user_status(
         raise UserConflictError("User status update failed") from exc
 
     updated_user = await _get_user_or_raise(db, user_id)
-    return _serialize_user(updated_user)
+    return updated_user

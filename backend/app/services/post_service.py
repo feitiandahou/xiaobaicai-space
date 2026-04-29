@@ -4,23 +4,29 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
+from app.core.error_codes import ErrorCode
+from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError, ValidationAppError
 from app.models.category import Category
 from app.models.post import Post
 from app.models.post_like import PostLike
 from app.models.tag import Tag
 from app.models.user import User
-from app.schemas.post import PostCreate, PostOut, PostListItem, PostUpdate
+from app.schemas.post import PostCreate, PostUpdate
 
 
 class PostServiceError(Exception):
     pass
-class PostNotFoundError(PostServiceError):
+class PostNotFoundError(NotFoundError, PostServiceError):
+    code = ErrorCode.POST_NOT_FOUND.value
     pass
-class PostConflictError(PostServiceError):
+class PostConflictError(ConflictError, PostServiceError):
+    code = ErrorCode.POST_CONFLICT.value
     pass
-class PostValidationError(PostServiceError):
+class PostValidationError(ValidationAppError, PostServiceError):
+    code = ErrorCode.POST_VALIDATION_ERROR.value
     pass
-class PostPermissionError(PostServiceError):
+class PostPermissionError(PermissionDeniedError, PostServiceError):
+    code = ErrorCode.POST_PERMISSION_DENIED.value
     pass
 
 
@@ -51,48 +57,6 @@ def _ensure_can_manage_post(actor: User, post: Post) -> None:
 
 def _post_query():
     return select(Post).options(selectinload(Post.tags))
-
-def _serialize_post(post: Post) -> PostOut:
-    tag_ids = [int(tag.id) for tag in post.tags]
-    tags = [tag.name for tag in post.tags]
-    return PostOut(
-        id = int(post.id),
-        user_id=int(post.user_id),
-        title=post.title,
-        slug=post.slug,
-        summary=post.summary,
-        content=post.content,
-        cover_image=post.cover_image,
-        category_id=int(post.category_id) if post.category_id is not None else None,
-        status=int(post.status),
-        is_top=int(post.is_top),
-        published_at=post.published_at,
-        is_delete=int(post.is_delete),
-        view_count=int(post.view_count),
-        like_count=int(post.like_count),
-        created_at=post.created_at,
-        updated_at=post.updated_at,
-        tag_ids=tag_ids,
-        tags=tags
-    )
-def _serialize_post_list_item(post: Post) -> PostListItem:
-    tag_ids = [int(tag.id) for tag in post.tags]
-    tags = [tag.name for tag in post.tags]
-    return PostListItem(
-        id=int(post.id),
-        title=post.title,
-        slug=post.slug,
-        summary=post.summary,
-        cover_image=post.cover_image,
-        status=int(post.status),
-        is_top=int(post.is_top),
-        view_count=int(post.view_count),
-        like_count=int(post.like_count),
-        published_at=post.published_at,
-        created_at=post.created_at,
-        tag_ids=tag_ids,
-        tags=tags,
-    )
 
 async def _get_post_or_raise(
         db: AsyncSession,
@@ -204,7 +168,7 @@ async def list_posts(
     include_deleted: bool = False,
     status: int | None = None,
     category_id: int | None = None,
-) -> list[PostListItem]:
+) -> list[Post]:
     stmt = _post_query().order_by(
         Post.is_top.desc(),
         Post.published_at.desc(),
@@ -221,17 +185,48 @@ async def list_posts(
     if category_id is not None:
         stmt = stmt.where(Post.category_id == category_id)
     posts = await db.scalars(stmt)
-    return [_serialize_post_list_item(post) for post in posts]
+    return list(posts)
 
-async def get_public_post(db: AsyncSession, post_id: int) -> PostOut:
-    post = await _get_public_post_or_raise(db, post_id)
-    return _serialize_post(post)
 
-async def get_public_post_by_slug(db: AsyncSession, slug: str) -> PostOut:
-    post = await _get_public_post_by_slug_or_raise(db, slug)
-    return _serialize_post(post)
+async def list_public_posts(
+    db: AsyncSession,
+    *,
+    category_id: int | None = None,
+) -> list[Post]:
+    return await list_posts(
+        db,
+        published_only=True,
+        include_drafts=False,
+        include_deleted=False,
+        status=None,
+        category_id=category_id,
+    )
 
-async def create_post(db: AsyncSession, payload: PostCreate, *, actor: User) -> PostOut:
+
+async def list_manage_posts(
+    db: AsyncSession,
+    *,
+    include_drafts: bool = False,
+    include_deleted: bool = False,
+    status: int | None = None,
+    category_id: int | None = None,
+) -> list[Post]:
+    return await list_posts(
+        db,
+        published_only=False,
+        include_drafts=include_drafts,
+        include_deleted=include_deleted,
+        status=status,
+        category_id=category_id,
+    )
+
+async def get_public_post(db: AsyncSession, post_id: int) -> Post:
+    return await _get_public_post_or_raise(db, post_id)
+
+async def get_public_post_by_slug(db: AsyncSession, slug: str) -> Post:
+    return await _get_public_post_by_slug_or_raise(db, slug)
+
+async def create_post(db: AsyncSession, payload: PostCreate, *, actor: User) -> Post:
     _ensure_can_create_post(actor, payload.user_id)
     await _ensure_user_exists(db, payload.user_id)
     await _ensure_category_exists(db, payload.category_id)
@@ -244,9 +239,9 @@ async def create_post(db: AsyncSession, payload: PostCreate, *, actor: User) -> 
     await _commit_post_write(db, "Post already exists")
 
     create_post = await _get_post_or_raise(db, int(post.id), include_deleted=True)
-    return _serialize_post(create_post)
+    return create_post
 
-async def update_post(db: AsyncSession, post_id: int, payload: PostUpdate, *, actor: User) -> PostOut:
+async def update_post(db: AsyncSession, post_id: int, payload: PostUpdate, *, actor: User) -> Post:
     post = await _get_manageable_post_or_raise(db, post_id, actor=actor)
     update_data = payload.model_dump(exclude_unset=True, exclude={"tag_ids"})
 
@@ -264,7 +259,7 @@ async def update_post(db: AsyncSession, post_id: int, payload: PostUpdate, *, ac
     await _commit_post_write(db, "Post update conflicts with existing data")
 
     update_post = await _get_post_or_raise(db, post_id, include_deleted=False)
-    return _serialize_post(update_post)
+    return update_post
 
 async def delete_post(db: AsyncSession, post_id: int, *, actor: User) -> None:
     post = await _get_manageable_post_or_raise(db, post_id, actor=actor)
