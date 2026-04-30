@@ -1,5 +1,6 @@
 'use client'
 
+import type { Variants } from 'framer-motion'
 import { motion } from 'framer-motion'
 import { ReactNode } from 'react'
 
@@ -8,10 +9,15 @@ interface PageTransitionProps {
   className?: string
 }
 
-const transitionVariants = {
-  hidden: { opacity: 0, y: 20 },
-  enter: { opacity: 1, y: 0, transition: { duration: 0.5, ease: 'easeOut' } },
-  exit: { opacity: 0, y: -20, transition: { duration: 0.3, ease: 'easeIn' } },
+const transitionVariants: Variants = {
+  hidden: { opacity: 0, y: 18, filter: 'blur(6px)' },
+  enter: {
+    opacity: 1,
+    y: 0,
+    filter: 'blur(0px)',
+    transition: { duration: 0.55, ease: 'easeOut' },
+  },
+  exit: { opacity: 0, y: -12, transition: { duration: 0.25, ease: 'easeIn' } },
 }
 
 export function PageTransition({ children, className }: PageTransitionProps) {

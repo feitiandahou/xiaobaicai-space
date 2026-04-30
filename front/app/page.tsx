@@ -1,56 +1,103 @@
 ﻿'use client';
 
 import { PageTransition } from '@/components/layout/PageTransition';
+import { fetchPosts, fetchSiteConfig } from '@/lib/api';
 import { motion } from 'framer-motion';
+import { ArrowUpRight, Flame, Newspaper, PenLine } from 'lucide-react';
 import Link from 'next/link';
-import { MoveRight } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+
+type HomeSnapshot = {
+  postCount: number;
+  latestTitle: string;
+};
 
 export default function Home() {
+  const [subtitle, setSubtitle] = useState('Writing software, systems, and clear thoughts.');
+  const [snapshot, setSnapshot] = useState<HomeSnapshot>({
+    postCount: 0,
+    latestTitle: 'No published post yet',
+  });
+
+  useEffect(() => {
+    fetchSiteConfig().then((config) => {
+      if (config?.subtitle) {
+        setSubtitle(config.subtitle);
+      }
+    });
+
+    fetchPosts({ page: 1, page_size: 3 }).then((result) => {
+      setSnapshot({
+        postCount: result.meta.total,
+        latestTitle: result.data[0]?.title || 'No published post yet',
+      });
+    });
+  }, []);
+
+  const chips = useMemo(
+    () => [
+      { icon: Newspaper, label: `${snapshot.postCount} published essays` },
+      { icon: Flame, label: `Latest: ${snapshot.latestTitle}` },
+    ],
+    [snapshot]
+  );
+
   return (
-    <PageTransition className="flex flex-col items-center justify-center min-h-[60vh] text-center pt-24">
+    <PageTransition className="pt-8 md:pt-14">
       <motion.div
-        initial={{ scale: 0.9, opacity: 0, filter: "blur(10px)" }}
-        animate={{ scale: 1, opacity: 1, filter: "blur(0px)" }}
-        transition={{ duration: 0.8, ease: "easeOut" }}
-        className="mb-8"
+        initial={{ scale: 0.95, opacity: 0, filter: 'blur(8px)' }}
+        animate={{ scale: 1, opacity: 1, filter: 'blur(0px)' }}
+        transition={{ duration: 0.75, ease: 'easeOut' }}
+        className="card-surface grain-overlay rounded-4xl p-7 md:p-12"
       >
-        <span className="px-4 py-1.5 rounded-full border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 text-xs font-medium tracking-wide text-muted-foreground inline-block mb-3">
-          Welcome to the Space
+        <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-line bg-white/50 text-xs font-semibold uppercase tracking-[0.14em] text-ink-muted">
+          <PenLine className="w-3.5 h-3.5" />
+          Independent Publication
         </span>
-        <h1 className="text-5xl md:text-7xl font-bold tracking-tight text-foreground leading-tight">
-          Crafting Art <br /> Through Code
+
+        <h1 className="mt-6 text-5xl md:text-7xl leading-[0.92] text-ink">
+          Build systems.
+          <br />
+          Publish clarity.
         </h1>
-      </motion.div>
 
-      <motion.p
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6, delay: 0.2 }}
-        className="text-lg md:text-xl text-muted-foreground max-w-[500px] mb-10 leading-relaxed font-light"
-      >
-        A minimalist personal sanctuary designed to showcase thoughts, engineering, and digital aesthetics.
-      </motion.p>
+        <p className="mt-6 max-w-2xl text-base md:text-xl text-ink-muted leading-relaxed">{subtitle}</p>
 
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6, delay: 0.4 }}
-        className="flex items-center space-x-4"
-      >
-        <Link
-          href="/blog"
-          className="group flex items-center space-x-2 bg-black dark:bg-white text-white dark:text-black px-6 py-3 rounded-full font-medium hover:scale-105 transition-transform active:scale-95 shadow-md"
+        <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-3">
+          {chips.map((chip, index) => (
+            <motion.div
+              key={chip.label}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.16 + index * 0.08, duration: 0.45 }}
+              className="rounded-2xl border border-line bg-white/55 px-4 py-3 text-sm text-ink-muted flex items-center gap-3"
+            >
+              <chip.icon className="w-4 h-4 text-burnt" />
+              <span className="truncate">{chip.label}</span>
+            </motion.div>
+          ))}
+        </div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3, duration: 0.45 }}
+          className="mt-9 flex flex-wrap items-center gap-3"
         >
-          <span>Read Articles</span>
-          <MoveRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-        </Link>
-        <Link
-          href="https://github.com"
-          target="_blank"
-          className="px-6 py-3 rounded-full font-medium hover:bg-black/5 dark:hover:bg-white/5 transition-colors border border-transparent hover:border-black/10 dark:hover:border-white/10 text-muted-foreground hover:text-foreground"        
-        >
-          GitHub
-        </Link>
+          <Link
+            href="/blog"
+            className="group inline-flex items-center gap-2 rounded-full bg-[#1f1d1a] text-[#fdf9f1] px-6 py-3 text-sm font-semibold tracking-wide hover:opacity-90 transition-opacity"
+          >
+            Explore Articles
+            <ArrowUpRight className="w-4 h-4 group-hover:-translate-y-0.5 group-hover:translate-x-0.5 transition-transform" />
+          </Link>
+          <Link
+            href="/admin"
+            className="inline-flex items-center gap-2 rounded-full border border-line bg-white/60 px-6 py-3 text-sm font-semibold text-ink-muted hover:text-ink hover:bg-white/75 transition-colors"
+          >
+            Admin Console
+          </Link>
+        </motion.div>
       </motion.div>
     </PageTransition>
   );

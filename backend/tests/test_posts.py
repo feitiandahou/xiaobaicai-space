@@ -160,6 +160,35 @@ def test_manage_list_posts_requires_admin(post_app: FastAPI) -> None:
     assert response.headers["www-authenticate"] == "Bearer"
 
 
+def test_manage_get_post_returns_content_for_admin(post_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    get_post_mock = AsyncMock(return_value=_post_payload(post_id=7))
+    app_admin = cast(User, SimpleNamespace(id=1, role="admin", is_active=True))
+
+    async def override_current_admin() -> User:
+        return app_admin
+
+    post_app.dependency_overrides[get_current_admin] = override_current_admin
+    monkeypatch.setattr(posts_api, "get_manage_post_service", get_post_mock)
+
+    with TestClient(post_app) as client:
+        response = client.get("/api/v1/admin/posts/7")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["id"] == 7
+    assert response.json()["data"]["content"] == "body"
+    assert get_post_mock.await_args is not None
+    _, kwargs = get_post_mock.await_args
+    assert kwargs["actor"] is app_admin
+
+
+def test_manage_get_post_requires_admin(post_app: FastAPI) -> None:
+    with TestClient(post_app) as client:
+        response = client.get("/api/v1/admin/posts/7")
+
+    assert response.status_code == 401
+    assert response.json() == {"code": ErrorCode.AUTHENTICATION_REQUIRED.value, "detail": "Authentication required"}
+
+
 @pytest.mark.parametrize(
     ("method", "path", "json_body"),
     [

@@ -22,6 +22,7 @@ from app.services.commands.posts import (
     update_post as update_post_service,
 )
 from app.services.queries.posts import (
+    get_manage_post as get_manage_post_service,
     get_public_post as get_public_post_service,
     get_public_post_by_slug as get_public_post_by_slug_service,
     list_manage_posts as list_manage_posts_service,
@@ -85,6 +86,16 @@ async def list_manage_posts(
         page_size=page_size,
     )
     return present_post_list_response(posts)
+
+
+@admin_router.get("/{post_id}", response_model=PostResponse, responses=build_error_responses(401, 403, 404, 422))
+async def get_manage_post(
+    post_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin),
+) -> PostResponse:
+    post = await get_manage_post_service(db, post_id, actor=current_user)
+    return PostResponse(data=present_post_out(post))
 
 @router.get("/{post_id}", response_model=PostResponse, responses=build_error_responses(404, 422))
 async def get_post(post_id: int, db: AsyncSession = Depends(get_db)) -> PostResponse:

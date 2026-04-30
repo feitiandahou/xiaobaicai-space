@@ -1,9 +1,10 @@
 import json
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import Field, ValidationError, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
@@ -25,7 +26,7 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = Field(min_length=32)
     JWT_ALGORITHM: str = Field(default="HS256", min_length=1)
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60, gt=0)
-    CORS_ALLOWED_ORIGINS: list[str] = Field(default_factory=list)
+    CORS_ALLOWED_ORIGINS: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     @field_validator("DB_USER", "DB_PASSWORD", "DB_HOST", "DB_NAME", "JWT_SECRET_KEY", "JWT_ALGORITHM")
     @classmethod

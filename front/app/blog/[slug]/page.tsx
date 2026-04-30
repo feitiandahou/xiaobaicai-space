@@ -1,148 +1,260 @@
-'use client';
-
+import { LikeButton } from '@/components/blog/LikeButton';
 import { PageTransition } from '@/components/layout/PageTransition';
-import { fetchPostBySlug, likePostAPI, Post } from '@/lib/api';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Heart, ChevronLeft, CalendarDays } from 'lucide-react';
+import { fetchPostBySlug, fetchPosts, fetchSiteConfig, type Post } from '@/lib/api';
+import { CalendarDays, ChevronLeft, Eye } from 'lucide-react';
+import type { Metadata } from 'next';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
-import { useEffect, useState } from 'react';
-import { cn } from '@/lib/utils'; // if you need styling conditional
+import { notFound } from 'next/navigation';
 
-export default function BlogPost() {
-  const params = useParams();
-  const slug = params.slug as string;
+type PageParams = {
+  slug: string;
+};
 
-  const [post, setPost] = useState<Post | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [likeCount, setLikeCount] = useState(0);
-  const [isLiking, setIsLiking] = useState(false);
+type TocHeading = {
+  id: string;
+  text: string;
+  level: 2 | 3;
+};
 
-  useEffect(() => {
-    fetchPostBySlug(slug).then((res) => {
-      setPost(res);
-      if (res) setLikeCount(res.likes);
-      setLoading(false);
-    });
-  }, [slug]);
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ');
+}
 
-  const handleLike = async () => {
-    if (isLiking || !post) return;
-    setIsLiking(true);
-    const newLikes = await likePostAPI(post.slug);
-    if (newLikes !== null) {
-      setLikeCount(newLikes);
+function stripHtml(value: string): string {
+  return decodeHtmlEntities(value.replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
+}
+
+function toAnchorId(text: string, fallbackIndex: number): string {
+  const normalized = text
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\u4e00-\u9fa5\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized || `section-${fallbackIndex}`;
+}
+
+function injectHeadingIdsAndBuildToc(content: string): {
+  html: string;
+  toc: TocHeading[];
+} {
+  const toc: TocHeading[] = [];
+  const headingRegex = /<h([23])([^>]*)>([\s\S]*?)<\/h\1>/gi;
+  let index = 0;
+
+  const html = content.replace(headingRegex, (_, levelRaw: string, attrs: string, inner: string) => {
+    index += 1;
+    const text = stripHtml(inner);
+    const level = Number(levelRaw) as 2 | 3;
+    const existingId = /\sid=["']([^"']+)["']/i.exec(attrs)?.[1];
+    const id = existingId || toAnchorId(text, index);
+
+    if (text) {
+      toc.push({ id, text, level });
     }
-    setIsLiking(false);
-  };
 
-  if (loading) {
-    return (
-      <PageTransition className="max-w-3xl mx-auto pt-16 flex justify-center items-center h-[50vh]">
-        <div className="animate-pulse bg-black/10 dark:bg-white/10 w-16 h-16 rounded-full" />
-      </PageTransition>
-    );
+    if (existingId) {
+      return `<h${level}${attrs}>${inner}</h${level}>`;
+    }
+    return `<h${level}${attrs} id="${id}">${inner}</h${level}>`;
+  });
+
+  return { html, toc };
+}
+
+async function getAdjacentPosts(currentSlug: string): Promise<{
+  previous: Post | null;
+  next: Post | null;
+}> {
+  const list = await fetchPosts({ page: 1, page_size: 100 });
+  const posts = list.data;
+  const currentIndex = posts.findIndex((item) => item.slug === currentSlug);
+
+  if (currentIndex === -1) {
+    return { previous: null, next: null };
   }
+
+  return {
+    previous: posts[currentIndex + 1] || null,
+    next: currentIndex > 0 ? posts[currentIndex - 1] : null,
+  };
+}
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<PageParams>;
+}): Promise<Metadata> {
+  const { slug } = await params;
+  const [post, siteConfig] = await Promise.all([fetchPostBySlug(slug), fetchSiteConfig()]);
 
   if (!post) {
-    return (
-      <PageTransition className="max-w-3xl mx-auto pt-16 text-center text-muted-foreground font-light text-xl h-[40vh] flex items-center justify-center">
-        404 - Article not found.
-      </PageTransition>
-    );
+    return {
+      title: 'Article Not Found',
+      description: siteConfig?.description || 'Article not found.',
+    };
   }
 
+  const siteTitle = siteConfig?.title || 'Xiaobaicai Space';
+  const description = post.summary || stripHtml(post.content || '').slice(0, 160) || siteConfig?.description || '';
+  const canonicalPath = `/blog/${post.slug}`;
+  const ogImage = post.cover_image || '/og-default.png';
+
+  return {
+    title: `${post.title} | ${siteTitle}`,
+    description,
+    alternates: {
+      canonical: canonicalPath,
+    },
+    openGraph: {
+      type: 'article',
+      title: post.title,
+      description,
+      url: canonicalPath,
+      siteName: siteTitle,
+      publishedTime: post.published_at || post.created_at,
+      modifiedTime: post.updated_at,
+      tags: post.tags,
+      images: [
+        {
+          url: ogImage,
+          alt: post.title,
+        },
+      ],
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title: post.title,
+      description,
+      images: [ogImage],
+    },
+  };
+}
+
+export default async function BlogPostPage({
+  params,
+}: {
+  params: Promise<PageParams>;
+}) {
+  const { slug } = await params;
+  const post = await fetchPostBySlug(slug);
+
+  if (!post) {
+    notFound();
+  }
+
+  const [{ html: htmlContent, toc }, adjacent] = await Promise.all([
+    Promise.resolve(injectHeadingIdsAndBuildToc(post.content || '')),
+    getAdjacentPosts(post.slug),
+  ]);
+
   return (
-    <PageTransition className="max-w-3xl mx-auto pt-16 pb-24">
+    <PageTransition className="max-w-6xl mx-auto pt-8 pb-24">
       <Link
         href="/blog"
-        className="group mb-8 inline-flex items-center text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+        className="group mb-8 inline-flex items-center text-sm font-medium text-ink-muted hover:text-ink transition-colors"
       >
         <ChevronLeft className="mr-1 h-4 w-4 transition-transform group-hover:-translate-x-1" />
         Back to articles
       </Link>
 
-      <motion.article 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6 }}
-      >
-        <header className="mb-14">
-          <time
-            dateTime={post.created_at}
-            className="flex items-center text-sm text-muted-foreground mb-4"
-          >
-            <CalendarDays className="h-4 w-4 mr-2" />
-            {new Date(post.created_at).toLocaleDateString('en-US', {
-              year: 'numeric',
-              month: 'long',
-              day: 'numeric',
-            })}
-          </time>
-          <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-foreground sm:text-5xl mb-6 leading-tight">
-            {post.title}
-          </h1>
-          {post.summary && (
-            <p className="text-xl text-muted-foreground leading-relaxed font-light">
-              {post.summary}
-            </p>
-          )}
-          {post.tags?.length ? (
-            <div className="mt-6 flex flex-wrap gap-2">
-              {post.tags.map((tag) => (
-                <span
-                  key={tag}
-                  className="rounded-full bg-black/5 dark:bg-white/10 px-3 py-1 text-sm text-muted-foreground"
-                >
-                  #{tag}
-                </span>
-              ))}
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_250px] gap-8 items-start">
+        <article className="card-surface rounded-4xl p-7 md:p-10">
+          <header className="mb-14">
+            <div className="mb-5 flex flex-wrap items-center gap-4 text-sm text-ink-muted">
+              <time dateTime={post.created_at} className="flex items-center">
+                <CalendarDays className="h-4 w-4 mr-2" />
+                {new Date(post.created_at).toLocaleDateString('en-US', {
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric',
+                })}
+              </time>
+              <span className="inline-flex items-center">
+                <Eye className="w-4 h-4 mr-2" />
+                {post.view_count} views
+              </span>
             </div>
-          ) : null}
-        </header>
 
-        {/* Since content is likely markdown/html in a real app, you would parse it here 
-            For now, we just display plain text or use dangerouslySetInnerHTML */}
-        <div
-          className="prose prose-slate dark:prose-invert max-w-none text-base md:text-lg leading-loose
-                     prose-pre:bg-black/5 prose-pre:dark:bg-white/5 prose-pre:border prose-pre:border-black/10 prose-pre:dark:border-white/10
-                     prose-code:text-rose-500 prose-code:font-medium prose-img:rounded-3xl"
-          dangerouslySetInnerHTML={{ __html: post.content || '' }}
-        />
+            <h1 className="text-5xl md:text-6xl text-ink mb-6 leading-[0.94]">{post.title}</h1>
 
-        {/* Like Section */}
-        <div className="mt-20 pt-10 border-t border-black/5 dark:border-white/10 flex flex-col items-center">
-          <p className="text-sm font-medium text-muted-foreground mb-4 uppercase tracking-widest">
-            Show some love
-          </p>
-          <motion.button
-            onClick={handleLike}
-            disabled={isLiking}
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            className={cn(
-              "relative flex items-center gap-3 px-8 py-4 rounded-full border shadow-sm transition-colors",
-              isLiking ? "opacity-70" : "hover:shadow-md",
-              "bg-white/50 dark:bg-black/50 backdrop-blur-md border-black/10 dark:border-white/10"
+            {post.summary ? (
+              <p className="text-xl text-ink-muted leading-relaxed font-light">{post.summary}</p>
+            ) : null}
+
+            {post.tags?.length ? (
+              <div className="mt-6 flex flex-wrap gap-2">
+                {post.tags.map((tag) => (
+                  <span key={tag} className="rounded-full bg-black/5 px-3 py-1 text-sm text-ink-muted">
+                    #{tag}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </header>
+
+          <div
+            className="prose prose-stone max-w-none text-base md:text-lg leading-loose
+                     prose-headings:text-ink prose-p:text-ink prose-a:text-[#1e5f63]
+                     prose-pre:bg-[#efe8db] prose-pre:border prose-pre:border-line
+                     prose-code:text-[#a6502e] prose-code:font-medium prose-img:rounded-3xl"
+            dangerouslySetInnerHTML={{ __html: htmlContent }}
+          />
+
+          <LikeButton slug={post.slug} initialLikeCount={post.like_count} />
+
+          <nav className="mt-14 pt-8 border-t border-line grid grid-cols-1 md:grid-cols-2 gap-4">
+            {adjacent.previous ? (
+              <Link
+                href={`/blog/${adjacent.previous.slug}`}
+                className="rounded-2xl border border-line bg-white/60 p-4 hover:bg-white/80 transition-colors"
+              >
+                <p className="text-xs uppercase tracking-wider text-ink-muted mb-2">Previous</p>
+                <p className="text-ink leading-snug">{adjacent.previous.title}</p>
+              </Link>
+            ) : (
+              <div className="rounded-2xl border border-dashed border-line p-4 text-ink-muted text-sm">No previous article</div>
             )}
-          >
-            <AnimatePresence>
-              {isLiking && (
-                <motion.div 
-                  initial={{ scale: 0.5, opacity: 1 }}
-                  animate={{ scale: 2, opacity: 0 }}
-                  exit={{ opacity: 0 }}
-                  className="absolute inset-0 bg-rose-500/20 rounded-full"
-                />
-              )}
-            </AnimatePresence>
-            <Heart className={cn("w-6 h-6", likeCount > 0 ? "fill-rose-500 text-rose-500" : "text-muted-foreground")} />
-            <span className="text-lg font-medium text-foreground min-w-5 text-center">
-              {likeCount}
-            </span>
-          </motion.button>
-        </div>
-      </motion.article>
+
+            {adjacent.next ? (
+              <Link
+                href={`/blog/${adjacent.next.slug}`}
+                className="rounded-2xl border border-line bg-white/60 p-4 hover:bg-white/80 transition-colors text-right"
+              >
+                <p className="text-xs uppercase tracking-wider text-ink-muted mb-2">Next</p>
+                <p className="text-ink leading-snug">{adjacent.next.title}</p>
+              </Link>
+            ) : (
+              <div className="rounded-2xl border border-dashed border-line p-4 text-ink-muted text-sm text-right">No next article</div>
+            )}
+          </nav>
+        </article>
+
+        {toc.length > 0 ? (
+          <aside className="hidden lg:block sticky top-28 card-surface rounded-3xl p-5">
+            <p className="text-xs uppercase tracking-widest text-ink-muted mb-4">On this page</p>
+            <ul className="space-y-2">
+              {toc.map((item) => (
+                <li key={item.id} className={item.level === 3 ? 'pl-4' : ''}>
+                  <a
+                    href={`#${item.id}`}
+                    className="text-sm text-ink-muted hover:text-ink transition-colors leading-snug block"
+                  >
+                    {item.text}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </aside>
+        ) : null}
+      </div>
     </PageTransition>
   );
 }

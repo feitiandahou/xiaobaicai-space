@@ -285,6 +285,12 @@ async def get_public_post(db: AsyncSession, post_id: int) -> PostReadModel:
     return to_post_read_model(post)
 
 
+async def get_manage_post(db: AsyncSession, post_id: int, *, actor: User) -> PostReadModel:
+    post = await _get_post_or_raise(db, post_id)
+    _ensure_can_manage_post(actor, post)
+    return to_post_read_model(post)
+
+
 async def get_public_post_by_slug(db: AsyncSession, slug: str) -> PostReadModel:
     post = await _get_public_post_by_slug_or_raise(db, slug)
     return to_post_read_model(post)
