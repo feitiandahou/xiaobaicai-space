@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Cookie, Request, Response, status, Query, Depends
+from fastapi import APIRouter, Cookie, Request, Response, status, Query, Depends, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.audit import build_audit_context
 from app.api.responses import build_error_responses
@@ -29,7 +29,7 @@ from app.services.queries.posts import (
     list_public_posts as list_public_posts_service,
 )
 from app.core.database import get_db
-from app.core.security import get_current_admin
+from app.core.security import get_current_admin, get_current_user_optional
 from app.models.user import User
 
 router = APIRouter(prefix="/posts", tags=["posts"])
@@ -144,12 +144,14 @@ async def like_post(
     request: Request,
     response: Response,
     visitor_id: str | None = Cookie(default=None),
+    x_visitor_id: str | None = Header(default=None, alias="X-Visitor-Id"),
     db: AsyncSession = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
 ) -> PostLikeResponse:
-    actor_visitor_id = visitor_id or str(uuid4())
-    actor_key = f"guest:{actor_visitor_id}"
+    actor_visitor_id = x_visitor_id or visitor_id or str(uuid4())
+    actor_key = f"user:{current_user.id}" if current_user is not None else f"guest:{actor_visitor_id}"
 
-    if visitor_id is None:
+    if current_user is None and visitor_id is None:
         response.set_cookie(
             key="visitor_id",
             value=actor_visitor_id,

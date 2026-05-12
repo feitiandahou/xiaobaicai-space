@@ -1,3 +1,6 @@
+from collections.abc import Awaitable, Callable
+from typing import cast
+
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +18,13 @@ from app.services.queries.tags import (
     ensure_admin_access,
     get_tag_record_or_raise,
 )
+
+
+async def _refresh_instance_if_supported(db: AsyncSession, instance: object) -> None:
+    refresh = getattr(db, "refresh", None)
+    if callable(refresh):
+        refresh_callable = cast(Callable[[object], Awaitable[None]], refresh)
+        await refresh_callable(instance)
 
 
 async def _ensure_name_available(db: AsyncSession, name: str, *, exclude_tag_id: int | None = None) -> None:
@@ -54,6 +64,8 @@ async def create_tag(
         await db.rollback()
         raise TagConflictError("Tag already exists") from exc
 
+    await _refresh_instance_if_supported(db, tag)
+
     created_tag = await get_tag_record_or_raise(db, int(tag.id))
     tag_read_model = await build_tag_read_model(db, created_tag, published_only=False)
     await record_admin_action(
@@ -91,6 +103,8 @@ async def update_tag(
     except IntegrityError as exc:
         await db.rollback()
         raise TagConflictError("Tag update conflicts with existing data") from exc
+
+    await _refresh_instance_if_supported(db, tag)
 
     updated_tag = await get_tag_record_or_raise(db, tag_id)
     tag_read_model = await build_tag_read_model(db, updated_tag, published_only=False)

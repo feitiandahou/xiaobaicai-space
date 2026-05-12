@@ -1,3 +1,6 @@
+from collections.abc import Awaitable, Callable
+from typing import cast
+
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +19,13 @@ from app.services.queries.categories import (
     ensure_admin_access,
     get_category_record_or_raise,
 )
+
+
+async def _refresh_instance_if_supported(db: AsyncSession, instance: object) -> None:
+    refresh = getattr(db, "refresh", None)
+    if callable(refresh):
+        refresh_callable = cast(Callable[[object], Awaitable[None]], refresh)
+        await refresh_callable(instance)
 
 
 async def _ensure_slug_available(
@@ -81,6 +91,8 @@ async def create_category(
         await db.rollback()
         raise CategoryConflictError("Category already exists") from exc
 
+    await _refresh_instance_if_supported(db, category)
+
     created_category = await get_category_record_or_raise(db, int(category.id))
     category_read_model = await build_category_read_model(db, created_category, published_only=False)
     await record_admin_action(
@@ -122,6 +134,8 @@ async def update_category(
     except IntegrityError as exc:
         await db.rollback()
         raise CategoryConflictError("Category update conflicts with existing data") from exc
+
+    await _refresh_instance_if_supported(db, category)
 
     updated_category = await get_category_record_or_raise(db, category_id)
     category_read_model = await build_category_read_model(db, updated_category, published_only=False)

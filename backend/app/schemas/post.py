@@ -12,6 +12,7 @@ class PostBase(BaseModel):
 	category_id: int | None = Field(default=None, description="分类 ID")
 	status: int = Field(default=0, ge=0, le=2, description="状态: 0 草稿, 1 已发布, 2 已归档")
 	is_top: int = Field(default=0, ge=0, le=1, description="是否置顶")
+	created_at: datetime | None = Field(default=None, description="创建时间")
 	published_at: datetime | None = Field(default=None, description="发布时间")
 
 
@@ -29,6 +30,7 @@ class PostUpdate(BaseModel):
 	category_id: int | None = None
 	status: int | None = Field(default=None, ge=0, le=2)
 	is_top: int | None = Field(default=None, ge=0, le=1)
+	created_at: datetime | None = None
 	published_at: datetime | None = None
 	tag_ids: list[int] | None = None
 

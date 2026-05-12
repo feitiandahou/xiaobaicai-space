@@ -2,14 +2,14 @@
 
 import { PageTransition } from '@/components/layout/PageTransition';
 import {
-  CategoryOption,
-  createAdminCategory,
-  createAdminTag,
-  createPost,
-  fetchAdminCategories,
-  fetchAdminTags,
-  PostCreateData,
-  TagOption,
+    CategoryOption,
+    createAdminCategory,
+    createAdminTag,
+    createPost,
+    fetchAdminCategories,
+    fetchAdminTags,
+    PostCreateData,
+    TagOption,
 } from '@/lib/api/admin';
 import { ArrowLeft, Loader2, Plus, Save, X } from 'lucide-react';
 import Link from 'next/link';
@@ -23,6 +23,15 @@ function makeSlug(value: string): string {
     .replace(/[^a-z0-9\s-]/g, '')
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-');
+}
+
+function toDatetimeLocalValue(value?: string | null): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const offset = date.getTimezoneOffset();
+  const localDate = new Date(date.getTime() - offset * 60 * 1000);
+  return localDate.toISOString().slice(0, 16);
 }
 
 export default function NewPost() {
@@ -41,6 +50,7 @@ export default function NewPost() {
   const [newCategorySlug, setNewCategorySlug] = useState('');
   const [newTagName, setNewTagName] = useState('');
   const [newTagSlug, setNewTagSlug] = useState('');
+  const [slugEdited, setSlugEdited] = useState(false);
   
   const [formData, setFormData] = useState<PostCreateData>({
     user_id: 0,
@@ -52,6 +62,7 @@ export default function NewPost() {
     category_id: null,
     status: 0,
     is_top: 0,
+    created_at: '',
     tag_ids: [],
   });
 
@@ -78,6 +89,29 @@ export default function NewPost() {
       });
   }, [router]);
 
+  const handleTitleChange = (title: string) => {
+    setFormData((current) => {
+      const generatedFromCurrentTitle = makeSlug(current.title);
+      const generatedFromNextTitle = makeSlug(title);
+      const shouldSyncSlug = !slugEdited || !current.slug || current.slug === generatedFromCurrentTitle;
+
+      return {
+        ...current,
+        title,
+        slug: shouldSyncSlug ? generatedFromNextTitle : current.slug,
+      };
+    });
+  };
+
+  const handleSlugChange = (value: string) => {
+    const normalizedSlug = makeSlug(value);
+    setSlugEdited(Boolean(normalizedSlug));
+    setFormData((current) => ({
+      ...current,
+      slug: normalizedSlug,
+    }));
+  };
+
   const toggleTag = (tagId: number) => {
     setFormData((current) => {
       const existed = current.tag_ids.includes(tagId);
@@ -102,6 +136,8 @@ export default function NewPost() {
       await createPost(token, {
         ...formData,
         user_id: userId,
+        created_at: formData.created_at || undefined,
+        slug: formData.slug || undefined,
       });
       router.push('/admin');
     } catch (err) {
@@ -203,7 +239,7 @@ export default function NewPost() {
                <input
                  required
                  value={formData.title}
-                 onChange={(e) => setFormData({...formData, title: e.target.value})}
+                 onChange={(e) => handleTitleChange(e.target.value)}
                  className="w-full px-4 py-3 bg-white/75 border border-line rounded-2xl focus:outline-none focus:ring-2 focus:ring-[#1e5f63]/40"
                  placeholder="A practical title"
                />
@@ -213,7 +249,7 @@ export default function NewPost() {
                <label className="text-sm font-medium tracking-tight text-ink-muted">Slug (optional)</label>
                <input
                  value={formData.slug}
-                 onChange={(e) => setFormData({...formData, slug: e.target.value.toLowerCase().replace(/\s+/g, '-')})}
+                 onChange={(e) => handleSlugChange(e.target.value)}
                  className="w-full px-4 py-3 bg-white/75 border border-line rounded-2xl focus:outline-none focus:ring-2 focus:ring-[#1e5f63]/40"
                  placeholder="my-article-slug"
                />
@@ -274,6 +310,16 @@ export default function NewPost() {
                 <option value={1}>Published</option>
                 <option value={2}>Archived</option>
               </select>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium tracking-tight text-ink-muted">Created At</label>
+              <input
+                type="datetime-local"
+                value={toDatetimeLocalValue(formData.created_at)}
+                onChange={(e) => setFormData({ ...formData, created_at: e.target.value || undefined })}
+                className="w-full px-4 py-3 bg-white/75 border border-line rounded-2xl focus:outline-none focus:ring-2 focus:ring-[#1e5f63]/40"
+              />
             </div>
           </div>
 

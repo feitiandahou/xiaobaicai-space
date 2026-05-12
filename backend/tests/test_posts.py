@@ -16,7 +16,7 @@ from app.core.exception_handlers import register_exception_handlers
 from app.core.error_codes import ErrorCode
 from app.core.database import get_db
 from app.core.read_models import PostListPageReadModel, PostReadModel
-from app.core.security import get_current_admin, get_current_user
+from app.core.security import get_current_admin, get_current_user, get_current_user_optional
 from app.models.user import User
 from app.schemas.post import PostCreate, PostUpdate
 from app.services.commands.audit import AuditContext
@@ -253,6 +253,45 @@ def test_posts_openapi_declares_unified_error_models(post_app: FastAPI) -> None:
     }
 
 
+def test_like_post_route_prefers_header_visitor_id(post_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    like_post_mock = AsyncMock(return_value=3)
+    monkeypatch.setattr(posts_api, "like_post_service", like_post_mock)
+
+    with TestClient(post_app) as client:
+        response = client.post(
+            "/api/v1/posts/slug/hello-world/like",
+            headers={"X-Visitor-Id": "browser-visitor-1"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["like_count"] == 3
+    assert like_post_mock.await_args is not None
+    _, kwargs = like_post_mock.await_args
+    assert kwargs["actor_key"] == "guest:browser-visitor-1"
+
+
+def test_like_post_route_prefers_logged_in_user_actor_key(post_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    like_post_mock = AsyncMock(return_value=4)
+    monkeypatch.setattr(posts_api, "like_post_service", like_post_mock)
+
+    async def override_current_user_optional() -> User:
+        return cast(User, SimpleNamespace(id=9, role="admin", is_active=True))
+
+    post_app.dependency_overrides[get_current_user_optional] = override_current_user_optional
+
+    with TestClient(post_app) as client:
+        response = client.post(
+            "/api/v1/posts/slug/hello-world/like",
+            headers={"X-Visitor-Id": "browser-visitor-1"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["like_count"] == 4
+    assert like_post_mock.await_args is not None
+    _, kwargs = like_post_mock.await_args
+    assert kwargs["actor_key"] == "user:9"
+
+
 def test_list_public_posts_applies_published_only_filter(monkeypatch: pytest.MonkeyPatch) -> None:
     list_posts_mock = AsyncMock(return_value=_post_page_payload())
     db = cast(AsyncSession, SimpleNamespace())
@@ -277,6 +316,27 @@ def test_list_public_posts_applies_published_only_filter(monkeypatch: pytest.Mon
         page=1,
         page_size=10,
     )
+
+
+def test_public_post_query_excludes_missing_slug() -> None:
+    captured_scalars_stmt = None
+
+    class CapturingDb:
+        async def scalars(self, stmt):
+            nonlocal captured_scalars_stmt
+            captured_scalars_stmt = stmt
+            return []
+
+        async def scalar(self, stmt):
+            return 0
+
+    result = asyncio.run(list_public_posts(cast(AsyncSession, CapturingDb())))
+
+    assert result.total == 0
+    assert captured_scalars_stmt is not None
+    compiled = str(captured_scalars_stmt)
+    assert "posts.status = :status_1" in compiled
+    assert "posts.slug IS NOT NULL" in compiled
 
 
 def test_list_manage_posts_passes_management_filters(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -575,10 +635,14 @@ def test_create_post_rolls_back_and_translates_integrity_error(monkeypatch: pyte
     async def fake_load_tags(*args, **kwargs):
         return []
 
+    async def fake_generate_unique_slug(*args, **kwargs):
+        return "title"
+
     monkeypatch.setattr("app.services.commands.posts._ensure_user_exists", noop)
     monkeypatch.setattr("app.services.commands.posts._ensure_category_exists", noop)
     monkeypatch.setattr("app.services.commands.posts._ensure_slug_available", noop)
     monkeypatch.setattr("app.services.commands.posts._load_tags", fake_load_tags)
+    monkeypatch.setattr("app.services.commands.posts._generate_unique_slug", fake_generate_unique_slug)
 
     payload = PostCreate(title="title", content="body", user_id=1, tag_ids=[])
 
@@ -610,6 +674,9 @@ def test_create_post_records_admin_audit(monkeypatch: pytest.MonkeyPatch) -> Non
     async def fake_load_tags(*args, **kwargs):
         return []
 
+    async def fake_generate_unique_slug(*args, **kwargs):
+        return "title"
+
     async def fake_get_post_or_raise(*args, **kwargs):
         return created_post
 
@@ -617,6 +684,7 @@ def test_create_post_records_admin_audit(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr("app.services.commands.posts._ensure_category_exists", noop)
     monkeypatch.setattr("app.services.commands.posts._ensure_slug_available", noop)
     monkeypatch.setattr("app.services.commands.posts._load_tags", fake_load_tags)
+    monkeypatch.setattr("app.services.commands.posts._generate_unique_slug", fake_generate_unique_slug)
     monkeypatch.setattr("app.services.commands.posts._get_post_or_raise", fake_get_post_or_raise)
     monkeypatch.setattr("app.services.commands.posts.record_admin_action", audit_mock)
 
@@ -633,13 +701,253 @@ def test_create_post_records_admin_audit(monkeypatch: pytest.MonkeyPatch) -> Non
     audit_mock.assert_awaited_once()
 
 
+def test_create_post_generates_slug_from_title(monkeypatch: pytest.MonkeyPatch) -> None:
+    actor = cast(User, SimpleNamespace(id=1, role="admin", username="admin"))
+    added_posts: list[SimpleNamespace] = []
+
+    class FakeDb:
+        def add(self, post):
+            post.id = 22
+            post.tags = []
+            added_posts.append(post)
+
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+        async def scalar(self, stmt):
+            return None
+
+    async def noop(*args, **kwargs):
+        return None
+
+    async def fake_load_tags(*args, **kwargs):
+        return []
+
+    async def fake_get_post_or_raise(*args, **kwargs):
+        created_post = _post_payload(22)
+        return SimpleNamespace(
+            id=created_post.id,
+            user_id=created_post.user_id,
+            title=created_post.title,
+            slug=added_posts[0].slug,
+            summary=created_post.summary,
+            content=created_post.content,
+            cover_image=created_post.cover_image,
+            category_id=created_post.category_id,
+            status=created_post.status,
+            is_top=created_post.is_top,
+            published_at=created_post.published_at,
+            is_delete=created_post.is_delete,
+            view_count=created_post.view_count,
+            like_count=created_post.like_count,
+            created_at=created_post.created_at,
+            updated_at=created_post.updated_at,
+            tags=[],
+        )
+
+    monkeypatch.setattr("app.services.commands.posts._ensure_user_exists", noop)
+    monkeypatch.setattr("app.services.commands.posts._ensure_category_exists", noop)
+    monkeypatch.setattr("app.services.commands.posts._load_tags", fake_load_tags)
+    monkeypatch.setattr("app.services.commands.posts._get_post_or_raise", fake_get_post_or_raise)
+
+    result = asyncio.run(
+        create_post(
+            cast(AsyncSession, FakeDb()),
+            PostCreate(title="Hello World", content="body", user_id=1, tag_ids=[], slug=None),
+            actor=actor,
+        )
+    )
+
+    assert added_posts[0].slug == "hello-world"
+    assert result.slug == "hello-world"
+
+
+def test_update_post_generates_slug_when_blank(monkeypatch: pytest.MonkeyPatch) -> None:
+    actor = cast(User, SimpleNamespace(id=1, role="admin"))
+    post = SimpleNamespace(
+        id=10,
+        user_id=1,
+        title="Old Title",
+        slug=None,
+        summary=None,
+        content="body",
+        cover_image=None,
+        category_id=None,
+        status=1,
+        is_top=0,
+        published_at=None,
+        is_delete=0,
+        view_count=0,
+        like_count=0,
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+        tags=[],
+    )
+
+    class FakeDb:
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+        async def scalar(self, stmt):
+            return None
+
+    async def fake_get_post_or_raise(*args, **kwargs):
+        return post
+
+    monkeypatch.setattr("app.services.commands.posts._get_post_or_raise", fake_get_post_or_raise)
+
+    result = asyncio.run(update_post(cast(AsyncSession, FakeDb()), 10, PostUpdate(title="Changed Title", slug=""), actor=actor))
+
+    assert post.slug == "changed-title"
+    assert result.slug == "changed-title"
+
+
+def test_create_post_accepts_custom_created_at(monkeypatch: pytest.MonkeyPatch) -> None:
+    actor = cast(User, SimpleNamespace(id=1, role="admin", username="admin"))
+    added_posts: list[SimpleNamespace] = []
+    custom_created_at = datetime(2023, 5, 1, 8, 30, 0)
+
+    class FakeDb:
+        def add(self, post):
+            post.id = 31
+            post.tags = []
+            added_posts.append(post)
+
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+        async def scalar(self, stmt):
+            return None
+
+    async def noop(*args, **kwargs):
+        return None
+
+    async def fake_load_tags(*args, **kwargs):
+        return []
+
+    async def fake_get_post_or_raise(*args, **kwargs):
+        return SimpleNamespace(
+            id=31,
+            user_id=1,
+            title="title",
+            slug=added_posts[0].slug,
+            summary=None,
+            content="body",
+            cover_image=None,
+            category_id=None,
+            status=0,
+            is_top=0,
+            published_at=None,
+            is_delete=0,
+            view_count=0,
+            like_count=0,
+            created_at=added_posts[0].created_at,
+            updated_at=custom_created_at,
+            tags=[],
+        )
+
+    monkeypatch.setattr("app.services.commands.posts._ensure_user_exists", noop)
+    monkeypatch.setattr("app.services.commands.posts._ensure_category_exists", noop)
+    monkeypatch.setattr("app.services.commands.posts._load_tags", fake_load_tags)
+    monkeypatch.setattr("app.services.commands.posts._get_post_or_raise", fake_get_post_or_raise)
+
+    result = asyncio.run(
+        create_post(
+            cast(AsyncSession, FakeDb()),
+            PostCreate(title="title", content="body", user_id=1, tag_ids=[], created_at=custom_created_at),
+            actor=actor,
+        )
+    )
+
+    assert added_posts[0].created_at == custom_created_at
+    assert result.created_at == custom_created_at
+
+
+def test_update_post_allows_created_at_change(monkeypatch: pytest.MonkeyPatch) -> None:
+    actor = cast(User, SimpleNamespace(id=1, role="admin"))
+    updated_created_at = datetime(2022, 7, 9, 10, 11, 12)
+    post = SimpleNamespace(
+        id=10,
+        user_id=1,
+        title="Old Title",
+        slug="old-title",
+        summary=None,
+        content="body",
+        cover_image=None,
+        category_id=None,
+        status=1,
+        is_top=0,
+        published_at=None,
+        is_delete=0,
+        view_count=0,
+        like_count=0,
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+        tags=[],
+    )
+
+    class FakeDb:
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+        async def scalar(self, stmt):
+            return None
+
+    async def fake_get_post_or_raise(*args, **kwargs):
+        return post
+
+    monkeypatch.setattr("app.services.commands.posts._get_post_or_raise", fake_get_post_or_raise)
+
+    result = asyncio.run(
+        update_post(
+            cast(AsyncSession, FakeDb()),
+            10,
+            PostUpdate(created_at=updated_created_at),
+            actor=actor,
+        )
+    )
+
+    assert post.created_at == updated_created_at
+    assert result.created_at == updated_created_at
+
+
 def test_update_post_rolls_back_and_translates_integrity_error(monkeypatch: pytest.MonkeyPatch) -> None:
     actor = cast(User, SimpleNamespace(id=1, role="user"))
     rollback_mock = AsyncMock()
     db = cast(AsyncSession, SimpleNamespace(commit=AsyncMock(side_effect=_integrity_error()), rollback=rollback_mock))
 
     async def fake_get_post_or_raise(*args, **kwargs):
-        return SimpleNamespace(id=10, user_id=1, tags=[], title="old")
+        return SimpleNamespace(
+            id=10,
+            user_id=1,
+            title="old",
+            slug="old",
+            summary=None,
+            content="body",
+            cover_image=None,
+            category_id=None,
+            status=1,
+            is_top=0,
+            published_at=None,
+            is_delete=0,
+            view_count=0,
+            like_count=0,
+            created_at=datetime(2024, 1, 1),
+            updated_at=datetime(2024, 1, 1),
+            tags=[],
+        )
 
     monkeypatch.setattr("app.services.commands.posts._get_post_or_raise", fake_get_post_or_raise)
 

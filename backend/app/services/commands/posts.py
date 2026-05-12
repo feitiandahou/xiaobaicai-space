@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+import re
 
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
@@ -69,6 +70,41 @@ async def _ensure_slug_available(
         raise PostConflictError(f"Slug '{slug}' is already in use by post with id {existing_post_id}")
 
 
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9\s-]", "", value.lower()).strip()
+    slug = re.sub(r"\s+", "-", slug)
+    slug = re.sub(r"-+", "-", slug)
+    return slug.strip("-")
+
+
+def _normalize_optional_slug(slug: str | None) -> str | None:
+    if slug is None:
+        return None
+    normalized_slug = _slugify(slug)
+    return normalized_slug or None
+
+
+async def _generate_unique_slug(
+    db: AsyncSession,
+    title: str,
+    *,
+    exclude_post_id: int | None = None,
+) -> str:
+    base_slug = _slugify(title) or "post"
+    candidate_slug = base_slug
+    suffix = 2
+
+    while True:
+        stmt = select(Post.id).where(Post.slug == candidate_slug)
+        if exclude_post_id is not None:
+            stmt = stmt.where(Post.id != exclude_post_id)
+        existing_post_id = await db.scalar(stmt)
+        if existing_post_id is None:
+            return candidate_slug
+        candidate_slug = f"{base_slug}-{suffix}"
+        suffix += 1
+
+
 async def _load_tags(db: AsyncSession, tag_ids: Sequence[int]) -> list[Tag]:
     unique_ids = list(dict.fromkeys(tag_ids))
     if not unique_ids:
@@ -93,10 +129,13 @@ async def create_post(
     _ensure_can_create_post(actor, payload.user_id)
     await _ensure_user_exists(db, payload.user_id)
     await _ensure_category_exists(db, payload.category_id)
-    await _ensure_slug_available(db, payload.slug)
+    normalized_slug = _normalize_optional_slug(payload.slug) or await _generate_unique_slug(db, payload.title)
+    await _ensure_slug_available(db, normalized_slug)
     tags = await _load_tags(db, payload.tag_ids)
 
-    post = Post(**payload.model_dump(exclude={"tag_ids"}))
+    post_payload = payload.model_dump(exclude={"tag_ids"})
+    post_payload["slug"] = normalized_slug
+    post = Post(**post_payload)
     post.tags = tags
     db.add(post)
     await _commit_post_write(db, "Post already exists")
@@ -125,7 +164,14 @@ async def update_post(
     update_data = payload.model_dump(exclude_unset=True, exclude={"tag_ids"})
 
     if "slug" in update_data:
-        await _ensure_slug_available(db, update_data["slug"], exclude_post_id=post_id)
+        normalized_slug = _normalize_optional_slug(update_data["slug"])
+        if normalized_slug is None:
+            title_for_slug = update_data.get("title", post.title)
+            normalized_slug = await _generate_unique_slug(db, title_for_slug, exclude_post_id=post_id)
+        await _ensure_slug_available(db, normalized_slug, exclude_post_id=post_id)
+        update_data["slug"] = normalized_slug
+    elif "title" in update_data and not post.slug:
+        update_data["slug"] = await _generate_unique_slug(db, update_data["title"], exclude_post_id=post_id)
     if "category_id" in update_data:
         await _ensure_category_exists(db, update_data["category_id"])
 

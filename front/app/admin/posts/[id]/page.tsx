@@ -27,6 +27,15 @@ function makeSlug(value: string): string {
     .replace(/-+/g, '-');
 }
 
+function toDatetimeLocalValue(value?: string | null): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const offset = date.getTimezoneOffset();
+  const localDate = new Date(date.getTime() - offset * 60 * 1000);
+  return localDate.toISOString().slice(0, 16);
+}
+
 export default function EditPost() {
   const router = useRouter();
   const params = useParams();
@@ -46,6 +55,7 @@ export default function EditPost() {
   const [newCategorySlug, setNewCategorySlug] = useState('');
   const [newTagName, setNewTagName] = useState('');
   const [newTagSlug, setNewTagSlug] = useState('');
+  const [slugEdited, setSlugEdited] = useState(false);
   
   const [formData, setFormData] = useState<PostUpdateData>({
     title: '',
@@ -56,6 +66,7 @@ export default function EditPost() {
     category_id: null,
     status: 0,
     is_top: 0,
+    created_at: '',
     tag_ids: [],
   });
 
@@ -68,19 +79,22 @@ export default function EditPost() {
 
     Promise.all([fetchAdminPostById(token, id), fetchAdminCategories(token), fetchAdminTags(token)])
       .then(([currentPost, categoryList, tagList]) => {
+        const initialSlug = currentPost.slug || makeSlug(currentPost.title);
 
         setCategories(categoryList.filter((item) => item.id > 0 && item.name));
         setTags(tagList.filter((item) => item.id > 0 && item.name));
+        setSlugEdited(Boolean(currentPost.slug));
 
         setFormData({
           title: currentPost.title,
-          slug: currentPost.slug || '',
+          slug: initialSlug,
           summary: currentPost.summary || '',
           content: currentPost.content || '',
           cover_image: currentPost.cover_image || '',
           category_id: currentPost.category_id ?? null,
           status: currentPost.status,
           is_top: currentPost.is_top,
+          created_at: currentPost.created_at,
           tag_ids: currentPost.tag_ids,
         });
       })
@@ -91,6 +105,30 @@ export default function EditPost() {
         setInitLoading(false);
       });
   }, [id, router]);
+
+  const handleTitleChange = (title: string) => {
+    setFormData((current) => {
+      const generatedFromCurrentTitle = makeSlug(current.title || '');
+      const generatedFromNextTitle = makeSlug(title);
+      const currentSlug = current.slug || '';
+      const shouldSyncSlug = !slugEdited || !currentSlug || currentSlug === generatedFromCurrentTitle;
+
+      return {
+        ...current,
+        title,
+        slug: shouldSyncSlug ? generatedFromNextTitle : current.slug,
+      };
+    });
+  };
+
+  const handleSlugChange = (value: string) => {
+    const normalizedSlug = makeSlug(value);
+    setSlugEdited(Boolean(normalizedSlug));
+    setFormData((current) => ({
+      ...current,
+      slug: normalizedSlug,
+    }));
+  };
 
   const toggleTag = (tagId: number) => {
     setFormData((current) => {
@@ -111,7 +149,11 @@ export default function EditPost() {
     setLoading(true);
     try {
       const token = localStorage.getItem('admin_access_token') || '';
-      await updatePost(token, id, formData);
+      await updatePost(token, id, {
+        ...formData,
+        created_at: formData.created_at || undefined,
+        slug: formData.slug || undefined,
+      });
       router.push('/admin');
     } catch (err) {
       setIsError((err as Error).message);
@@ -247,7 +289,7 @@ export default function EditPost() {
                <input
                  required
                  value={formData.title}
-                 onChange={(e) => setFormData({...formData, title: e.target.value})}
+                 onChange={(e) => handleTitleChange(e.target.value)}
                  className="w-full px-4 py-3 bg-white/75 border border-line rounded-2xl focus:outline-none focus:ring-2 focus:ring-[#1e5f63]/40"
                />
             </div>
@@ -255,9 +297,8 @@ export default function EditPost() {
             <div className="space-y-2">
                <label className="text-sm font-medium tracking-tight text-ink-muted">Slug</label>
                <input
-                 required
                  value={formData.slug}
-                 onChange={(e) => setFormData({...formData, slug: e.target.value.toLowerCase().replace(/\s+/g, '-')})}
+                 onChange={(e) => handleSlugChange(e.target.value)}
                  className="w-full px-4 py-3 bg-white/75 border border-line rounded-2xl focus:outline-none focus:ring-2 focus:ring-[#1e5f63]/40"
                />
             </div>
@@ -315,6 +356,16 @@ export default function EditPost() {
                 <option value={1}>Published</option>
                 <option value={2}>Archived</option>
               </select>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium tracking-tight text-ink-muted">Created At</label>
+              <input
+                type="datetime-local"
+                value={toDatetimeLocalValue(formData.created_at)}
+                onChange={(e) => setFormData({ ...formData, created_at: e.target.value || undefined })}
+                className="w-full px-4 py-3 bg-white/75 border border-line rounded-2xl focus:outline-none focus:ring-2 focus:ring-[#1e5f63]/40"
+              />
             </div>
           </div>
 

@@ -233,12 +233,16 @@ def test_create_category_conflict_uses_specific_code(category_app: FastAPI, monk
 def test_create_category_records_admin_audit(monkeypatch: pytest.MonkeyPatch) -> None:
     actor = cast(User, SimpleNamespace(id=1, role="admin", username="admin"))
     audit_mock = AsyncMock()
+    refreshed_ids: list[int] = []
 
     class FakeDb:
         def add(self, category):
             category.id = 12
             category.created_at = datetime(2024, 1, 1)
             category.updated_at = datetime(2024, 1, 1)
+
+        async def refresh(self, category):
+            refreshed_ids.append(category.id)
 
         async def commit(self):
             return None
@@ -264,4 +268,5 @@ def test_create_category_records_admin_audit(monkeypatch: pytest.MonkeyPatch) ->
     )
 
     assert result.id == 12
+    assert refreshed_ids == [12]
     audit_mock.assert_awaited_once()

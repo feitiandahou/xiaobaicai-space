@@ -214,3 +214,44 @@ def test_update_tag_records_admin_audit(monkeypatch: pytest.MonkeyPatch) -> None
 
     assert result.id == 10
     audit_mock.assert_awaited_once()
+
+
+def test_create_tag_refreshes_instance_after_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    actor = cast(User, SimpleNamespace(id=1, role="admin", username="admin"))
+    audit_mock = AsyncMock()
+    refreshed_ids: list[int] = []
+
+    class FakeDb:
+        def add(self, tag):
+            tag.id = 12
+            tag.created_at = datetime(2024, 1, 1)
+
+        async def refresh(self, tag):
+            refreshed_ids.append(tag.id)
+
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+        async def scalar(self, stmt):
+            return None
+
+        async def get(self, model, tag_id):
+            return _tag_payload(12)
+
+    monkeypatch.setattr("app.services.commands.tags.record_admin_action", audit_mock)
+
+    result = asyncio.run(
+        create_tag(
+            cast(AsyncSession, FakeDb()),
+            TagCreate(name="fastapi", slug="fastapi"),
+            actor=actor,
+            audit_context=AuditContext(ip_address="127.0.0.1"),
+        )
+    )
+
+    assert result.id == 12
+    assert refreshed_ids == [12]
+    audit_mock.assert_awaited_once()

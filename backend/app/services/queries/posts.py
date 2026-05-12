@@ -91,7 +91,7 @@ def _apply_post_filters(
     if not include_deleted:
         stmt = stmt.where(Post.is_delete == 0)
     if published_only:
-        stmt = stmt.where(Post.status == 1)
+        stmt = stmt.where(Post.status == 1, Post.slug.is_not(None))
     elif status is not None:
         stmt = stmt.where(Post.status == status)
     elif not include_drafts:
