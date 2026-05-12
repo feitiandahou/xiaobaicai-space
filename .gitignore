@@ -31,6 +31,8 @@ var/
 wheels/
 *.egg-info/
 *.egg
+!front/lib/
+!front/lib/**
 
 # 安装记录
 *.manifest
