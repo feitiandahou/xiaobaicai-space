@@ -1,6 +1,7 @@
 import { LikeButton } from '@/components/blog/LikeButton';
 import { PageTransition } from '@/components/layout/PageTransition';
 import { fetchPostBySlug, fetchPosts, fetchSiteConfig, type Post } from '@/lib/api';
+import { toRenderablePostHtml } from '@/lib/post-content';
 import { CalendarDays, ChevronLeft, Eye } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
@@ -151,7 +152,7 @@ export default async function BlogPostPage({
   }
 
   const [{ html: htmlContent, toc }, adjacent] = await Promise.all([
-    Promise.resolve(injectHeadingIdsAndBuildToc(post.content || '')),
+    Promise.resolve(injectHeadingIdsAndBuildToc(toRenderablePostHtml(post.content || ''))),
     getAdjacentPosts(post.slug),
   ]);
 

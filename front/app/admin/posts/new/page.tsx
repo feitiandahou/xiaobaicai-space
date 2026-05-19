@@ -11,6 +11,7 @@ import {
     PostCreateData,
     TagOption,
 } from '@/lib/api/admin';
+import { handleRichTextPaste } from '@/lib/post-content';
 import { ArrowLeft, Loader2, Plus, Save, X } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -374,9 +375,15 @@ export default function NewPost() {
               required
               value={formData.content}
               onChange={(e) => setFormData({...formData, content: e.target.value})}
+              onPaste={(e) =>
+                handleRichTextPaste(e, formData.content, (content) => setFormData({ ...formData, content }))
+              }
               className="w-full px-5 py-4 bg-white/75 border border-line rounded-3xl focus:outline-none focus:ring-2 focus:ring-[#1e5f63]/40 min-h-[42vh] resize-y font-mono text-sm leading-loose"
               placeholder="<h2>Start writing...</h2>"
             />
+            <p className="text-xs text-ink-muted">
+              Pasting from Yuque or other rich-text editors will keep clipboard HTML instead of flattening it into plain text.
+            </p>
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-4 py-6 border-t border-line">
